@@ -1,0 +1,2 @@
+# Official API pinned to the revision inspected for this integration.
+opensportslib @ git+https://github.com/OpenSportsLab/opensportslib.git@4757f4f7f7b8b017cc5e84d58036e58a163e57b2

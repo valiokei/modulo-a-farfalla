@@ -1,0 +1,16 @@
+services:
+  api:
+    build:
+      context: ./backend
+      args:
+        TORCH_INDEX: https://download.pytorch.org/whl/cu130
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      AI_DEVICE: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

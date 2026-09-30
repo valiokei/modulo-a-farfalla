@@ -1,0 +1,9 @@
+export type Video={id:string;label:string;duration:number;time_offset:number;status:string;processing_progress:number;analyze_after_processing:boolean;ai_job_id?:string;ai_status?:string;ai_progress?:number;ai_error?:string;error?:string}
+export type Template={id:string;name:string;definition:{categories:(string|{name:string})[];statistics?:string[]}}
+export type SquadPlayer={id?:string;player_id:string;role?:string;starter?:boolean;squad_status?:string;player?:Player}
+export type Match={id:string;date:string;home_team:string;away_team:string;home_team_id?:string;away_team_id?:string;primary_team_id?:string;competition:string;season:string;venue:string;location_type:string;home_score?:number;away_score?:number;template_id?:string;template?:Template;notes:string;attacking_direction?:string;squad?:SquadPlayer[];videos:Video[]}
+export type Category={id:string;name:string;icon:string;shortcut?:string;order:number;enabled:boolean;pre_roll:number;post_roll:number;metadata_schema:Record<string,string[]>}
+export type Player={id:string;name:string;shirt_number?:number;position?:string;notes?:string;active:boolean};export type Team={id:string;name:string;season?:string;notes:string;has_logo?:boolean;players:Player[]}
+export type EventParticipant={id?:string;role:string;player:Player}
+export type Event={id:string;match_id:string;video_id:string;category_id:string;timestamp:number;start:number;end:number;note:string;tags:string[];team?:string;team_id?:string;player?:Player;players:EventParticipant[];category:Category;pitch_x?:number;pitch_y?:number;metadata:Record<string,string>;ai?:boolean;suggestion_status?:string;accepted_event_id?:string}
+export type Shape={type:string;x1:number;y1:number;x2:number;y2:number;color:string;text?:string;points?:[number,number][];mode?:'screen'|'player'|'field';opacity?:number;lineWidth?:number;fill?:string;start?:number;end?:number;trackIds?:string[];visible?:boolean}

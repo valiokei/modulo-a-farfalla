@@ -1,0 +1,77 @@
+name: Windows installer
+on:
+  push:
+    branches: [main, develop, codex/windows-installer]
+    tags: ['windows-*']
+    paths: ['desktop/**', 'backend/app/**', 'backend/tests/**', '.github/workflows/windows-installer.yml', 'frontend/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-installer-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build and test Windows bundle
+        shell: pwsh
+        run: |
+          $version = "${{ github.sha }}".Substring(0, 7)
+          if ("${{ github.ref }}".StartsWith("refs/tags/")) {
+            $expected = "^windows-\d{8}-$version$"
+            if ("${{ github.ref_name }}" -notmatch $expected) { throw "Release tag must be windows-YYYYMMDD-$version" }
+          }
+          ./desktop/build-windows.ps1 -Version $version
+      - name: Test installer and uninstall data preservation
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist/installer/*.exe | Select-Object -First 1).FullName
+          $target = Join-Path $env:RUNNER_TEMP "installed-app"
+          $process = Start-Process $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$target" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed" }
+          if (-not (Test-Path (Join-Path $target "ModuloAFarfallaUpdater.exe"))) { throw "Detached update helper missing from installer" }
+          python desktop/smoke_test.py --executable "$target/ModuloAFarfalla.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Installed application failed smoke test" }
+          $data = Join-Path $env:LOCALAPPDATA "ModuloAFarfalla"
+          New-Item -ItemType Directory $data -Force | Out-Null
+          Set-Content (Join-Path $data "preserve-test.txt") "retain"
+          Start-Process "$target/unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          if (-not (Test-Path (Join-Path $data "preserve-test.txt"))) { throw "Uninstall removed data" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Modulo-a-Farfalla-Windows-x64
+          path: dist/installer/*
+          retention-days: 30
+  publish:
+    if: startsWith(github.ref, 'refs/tags/windows-')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Modulo-a-Farfalla-Windows-x64
+          path: release-assets
+      - name: Publish verified Windows release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(find release-assets -maxdepth 1 -type f -name 'Modulo-a-Farfalla-Setup-*-x64.exe' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -type f -name 'Modulo-a-Farfalla-Setup-*-x64.exe.sha256' | wc -l)" -eq 1
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Modulo a Farfalla $GITHUB_REF_NAME" \
+            --generate-notes

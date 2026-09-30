@@ -1,0 +1,25 @@
+.env
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+*.db
+node_modules/
+dist/
+*.tsbuildinfo
+storage/*
+!storage/.gitkeep
+backend/checkpoints/
+/backend/storage/league-cache/
+desktop/build-version.txt
+.publication/
+.opencode/
+
+# Session-local Playwright/browser harness + verification artifacts (see docs/todo.md)
+opencode.json
+/e2e/
+.e2e-artifacts/
+frontend/e2e/.output/
+frontend/e2e/report/

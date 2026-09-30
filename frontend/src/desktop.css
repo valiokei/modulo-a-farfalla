@@ -1,0 +1,44 @@
+.desktopStatus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 22px;
+  padding: 12px 24px;
+  border-bottom: 1px solid #cbd6ce;
+  background: #e6f0ea;
+  color: #193b2a;
+  font-size: 13px;
+}
+.desktopStatus > span, .desktopAiWarning {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.desktopStatus svg, .desktopAiWarning svg {flex: 0 0 auto;}
+.desktopAiWarning {color: #775015; font-size: 13px; margin: 0;}
+.desktopStatus em {font-style: normal; color: #775015;}
+.desktopUpdate {flex: 1 1 100%; max-width: 980px; margin: 2px 0; padding: 10px 12px;
+  border: 1px solid #b8c8bd; border-radius: 6px; background: #f4f8f5; color: #193b2a;}
+.desktopUpdate.available {border-color: #d99a35; background: #fff8e9; color: #563800;}
+.desktopUpdateHead,.desktopUpdateHead>div,.desktopUpdateActions {display:flex; align-items:center; gap:10px;}
+.desktopUpdateHead {justify-content:space-between; flex-wrap:wrap;}
+.desktopUpdateHead>div {flex-wrap:wrap;}
+.desktopUpdateHead small {opacity:.75;}
+.desktopUpdateActions {margin-top:7px; flex-wrap:wrap;}
+.desktopUpdateActions span {flex:1 1 260px;}
+.desktopUpdate button {display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:36px;
+  padding:6px 11px; border:1px solid #819889; border-radius:5px; background:#fff; color:#193b2a; cursor:pointer;}
+.desktopUpdate.available button {border-color:#9b6816; color:#573800;}
+.desktopUpdate button:disabled {opacity:.6; cursor:wait;}
+.desktopUpdate a {display:inline-flex; align-items:center; gap:4px; color:#2457a7;}
+.desktopUpdate .desktopUpdateDismiss {border-color:transparent; background:transparent;}
+.desktopUpdateMessage {margin:8px 0 0; color:#9a2c25;}
+.desktopStatus + .login {min-height: calc(100dvh - 74px);}
+@media (max-width: 600px) {
+  .desktopStatus {padding: 10px 14px; gap: 8px 14px;}
+  .desktopAiWarning {width: 100%;}
+  .desktopUpdate {width:100%; box-sizing:border-box;}
+  .desktopUpdateHead,.desktopUpdateActions {align-items:flex-start;}
+}
+body.desktop-app header button:has(svg.lucide-log-out){display:none}
