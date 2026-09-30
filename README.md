@@ -42,22 +42,12 @@ GPU-less runner; test import/export and playback on the intended hardware.
 
 ## Windows desktop
 
-The public repository currently provides source code and automated Windows
-builds. A downloadable public installer release is being prepared; use only
-installers explicitly published on the [official Releases page](https://github.com/valiokei/modulo-a-farfalla/releases).
+Download the [Windows installer](https://github.com/valiokei/modulo-a-farfalla/releases/latest).
+It runs locally, needs no login, and preserves your data when updated.
 
-The self-contained Windows installer runs the API on loopback and opens the
-local interface in a browser. Its database and media live in the current
-Windows user's LocalAppData and are not synced to BrunaLab. The updater checks
-public GitHub releases without a token; users review and confirm installation,
-and the downloaded installer is verified against its published SHA-256 file.
-
-Start with the [Quick Start](docs/QUICKSTART.md), then follow the
-[match-analysis tutorial](docs/MATCH_ANALYSIS_TUTORIAL.md). The Windows client
-is a local, self-contained edition: it includes its own loopback-only API and
-SQLite store, needs no login, and does not connect to a remote server.
-See the [Windows installation guide](WINDOWS_INSTALL.md) for setup and local
-data details.
+New releases are published from tested commits on `main`. See the
+[Quick Start](docs/QUICKSTART.md), [match-analysis tutorial](docs/MATCH_ANALYSIS_TUTORIAL.md)
+and [installation guide](WINDOWS_INSTALL.md).
 
 ## Self-host with Docker
 

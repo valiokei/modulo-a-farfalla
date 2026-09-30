@@ -4,19 +4,21 @@ Modulo a Farfalla for Windows is a self-contained, single-user local client.
 It does not need Docker, Python, an account, or a connection to a Modulo a
 Farfalla server.
 
-Public installer release status: preparation in progress. The new public
-repository does not yet publish a verified installer. Follow the
-[official Releases page](https://github.com/valiokei/modulo-a-farfalla/releases)
-for the first download; source code availability is not an installer release.
+Download the latest tested installer from the
+[official Releases page](https://github.com/valiokei/modulo-a-farfalla/releases/latest).
 
 1. Download the Windows x64 installer from the project's GitHub Releases.
 2. Optionally compare its SHA-256 with the checksum published alongside it.
 3. Run the installer and start **Modulo a Farfalla** from the Start menu.
 4. The app opens its interface in your browser on a random `127.0.0.1` port.
    It is bound to this computer only and is not reachable from your LAN.
-5. Your database, videos and settings are stored under
-   `%LOCALAPPDATA%\ModuloAFarfalla`. Back up this folder before moving to a
-   different PC or uninstalling.
+5. Your database, videos and settings stay in
+   `%LOCALAPPDATA%\ModuloAFarfalla` after an update or uninstall. Back up this
+   folder before installing a new version or moving to another PC.
+
+Older installers may not show update notifications. Install the latest version
+manually over the existing installation once; later releases can be checked
+in the app.
 
 The client bundles FFmpeg and uses available NVIDIA, Intel or AMD video
 encoders when detected, with CPU fallback. Playback decoding is controlled by

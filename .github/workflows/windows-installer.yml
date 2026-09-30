@@ -1,9 +1,7 @@
 name: Windows installer
 on:
   push:
-    branches: [main, develop, codex/windows-installer]
-    tags: ['windows-*']
-    paths: ['desktop/**', 'backend/app/**', 'backend/tests/**', '.github/workflows/windows-installer.yml', 'frontend/**']
+    branches: [main, develop]
   workflow_dispatch:
 permissions:
   contents: read
@@ -28,10 +26,6 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.sha }}".Substring(0, 7)
-          if ("${{ github.ref }}".StartsWith("refs/tags/")) {
-            $expected = "^windows-\d{8}-$version$"
-            if ("${{ github.ref_name }}" -notmatch $expected) { throw "Release tag must be windows-YYYYMMDD-$version" }
-          }
           ./desktop/build-windows.ps1 -Version $version
       - name: Test installer and uninstall data preservation
         shell: pwsh
@@ -41,11 +35,18 @@ jobs:
           $process = Start-Process $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$target" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Installer failed" }
           if (-not (Test-Path (Join-Path $target "ModuloAFarfallaUpdater.exe"))) { throw "Detached update helper missing from installer" }
+          if (-not (Test-Path (Join-Path $target "_internal/THIRD_PARTY_NOTICES.md"))) { throw "Third-party notices missing from installer" }
+          $ffmpegDir = Join-Path $target "_internal/ffmpeg"
+          $ffmpegLicense = Get-ChildItem $ffmpegDir -File | Where-Object { $_.Name -match '^(LICENSE|COPYING)' }
+          if (-not $ffmpegLicense) { throw "Bundled FFmpeg licence missing from installer" }
           python desktop/smoke_test.py --executable "$target/ModuloAFarfalla.exe"
           if ($LASTEXITCODE -ne 0) { throw "Installed application failed smoke test" }
           $data = Join-Path $env:LOCALAPPDATA "ModuloAFarfalla"
           New-Item -ItemType Directory $data -Force | Out-Null
           Set-Content (Join-Path $data "preserve-test.txt") "retain"
+          $upgrade = Start-Process $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$target" -Wait -PassThru
+          if ($upgrade.ExitCode -ne 0) { throw "Installer upgrade failed" }
+          if (-not (Test-Path (Join-Path $data "preserve-test.txt"))) { throw "Upgrade removed data" }
           Start-Process "$target/unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
           if (-not (Test-Path (Join-Path $data "preserve-test.txt"))) { throw "Uninstall removed data" }
       - uses: actions/upload-artifact@v4
@@ -54,12 +55,13 @@ jobs:
           path: dist/installer/*
           retention-days: 30
   publish:
-    if: startsWith(github.ref, 'refs/tags/windows-')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: Modulo-a-Farfalla-Windows-x64
@@ -69,9 +71,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(find release-assets -maxdepth 1 -type f -name 'Modulo-a-Farfalla-Setup-*-x64.exe' | wc -l)" -eq 1
-          test "$(find release-assets -maxdepth 1 -type f -name 'Modulo-a-Farfalla-Setup-*-x64.exe.sha256' | wc -l)" -eq 1
-          gh release create "$GITHUB_REF_NAME" release-assets/* \
+          short_sha="${GITHUB_SHA:0:7}"
+          commit_date="$(date -u -d "$(git show -s --format=%cI "$GITHUB_SHA")" +%Y%m%d)"
+          tag="windows-$commit_date-$short_sha"
+          installer="release-assets/Modulo-a-Farfalla-Setup-$short_sha-x64.exe"
+          test -f "$installer"
+          test -f "$installer.sha256"
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 2
+          (cd release-assets && sha256sum -c "$(basename "$installer").sha256")
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; refusing to replace its assets"
+            exit 1
+          fi
+          gh release create "$tag" "$installer" "$installer.sha256" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Modulo a Farfalla $GITHUB_REF_NAME" \
+            --target "$GITHUB_SHA" \
+            --title "Modulo a Farfalla $tag" \
             --generate-notes

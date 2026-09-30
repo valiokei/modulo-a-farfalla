@@ -5,7 +5,7 @@ required settings.
 
 ## Windows desktop
 
-1. Install the signed-off x64 installer from the official project release.
+1. Install the x64 installer from the official project release.
 2. Start **Modulo a Farfalla**. The desktop edition runs its API on loopback
    (`127.0.0.1`) and opens the local interface; it does not connect to a server
    or require an account.
