@@ -3,6 +3,8 @@
 **Football belongs to everyone. The tools that help people understand the game
 should not cost grassroots clubs thousands of euros.**
 
+Support: [PayPal](https://www.paypal.com/donate?hosted_button_id=AF72GDATCBQ7S) | [Revolut](https://revolut.me/valerixu32)
+
 Modulo a Farfalla is a football video-analysis workspace for coaches and
 players. It brings match video, event tagging, notes, clips, team records and
 reviewable AI suggestions together, while keeping the club in control of its
@@ -116,7 +118,7 @@ match events. A coach must accept, edit or reject them. Useful accuracy,
 precision and recall have **not** been established. No automatic player
 tracking, team attribution or tactical-metric generation is claimed.
 
-## Licensing and support
+## Licensing
 
 The project aims to make capable analysis tools accessible to grassroots
 football. The [LICENSE](LICENSE) allows the stated non-commercial community
@@ -126,11 +128,6 @@ Valerio Brunacci through [GitHub](https://github.com/valiokei). No commercial
 price is implied by this repository. Contributions and third-party dependencies
 have separate rights; see [CONTRIBUTING](CONTRIBUTING.md) and
 [third-party notices](desktop/THIRD_PARTY_NOTICES.md).
-
-Support development through [PayPal](https://www.paypal.com/donate?hosted_button_id=AF72GDATCBQ7S)
-or [Revolut](https://revolut.me/valerixu32). These links were checked against
-the maintainer's existing project page on 2026-09-30. Support is voluntary and
-does not purchase a commercial-use licence.
 
 ## Current release status
 
