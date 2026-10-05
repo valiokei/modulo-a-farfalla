@@ -331,6 +331,18 @@ class ExternalIdentity(Base):
     __table_args__ = (UniqueConstraint("provider", "entity_type", "external_id", name="uq_external_identity"),)
 
 
+class LeagueTeamMapping(Base):
+    """A club can field different teams in different competitions."""
+    __tablename__ = "league_team_mappings"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    season: Mapped[str] = mapped_column(String(20), nullable=False)
+    competition_external_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    team_external_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    local_team_id: Mapped[str] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    __table_args__ = (UniqueConstraint("provider", "season", "competition_external_id", "team_external_id", name="uq_league_team_mapping"),)
+
+
 class OfficialPlayerStat(Base):
     __tablename__ = "official_player_stats"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

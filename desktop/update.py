@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
+import ssl
 from pathlib import Path
 import re
 import shutil
@@ -23,7 +25,24 @@ INSTALLER_NAME = re.compile(r"^Modulo-a-Farfalla-Setup-[A-Za-z0-9._-]+-x64\.exe$
 
 
 class UpdateError(RuntimeError):
-    pass
+    def __init__(self, message: str, code: str = "unknown"):
+        super().__init__(message)
+        self.code = code
+
+
+def network_error(exc: BaseException) -> UpdateError:
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, socket.gaierror):
+        return UpdateError("Cannot resolve api.github.com. Check DNS and network settings.", "dns")
+    if isinstance(reason, (ssl.SSLError, ssl.CertificateError)):
+        return UpdateError("Secure connection to GitHub failed. Check system time and certificates.", "tls")
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return UpdateError("GitHub API timed out. Retry after checking the connection.", "timeout")
+    if "timed out" in str(reason).lower() or "timeout" in str(reason).lower():
+        return UpdateError("GitHub API timed out. Retry after checking the connection.", "timeout")
+    if "proxy" in str(reason).lower():
+        return UpdateError("The configured proxy could not reach the GitHub API.", "proxy")
+    return UpdateError("Could not reach api.github.com. Check the app network connection.", "network")
 
 
 def build_version() -> str:
@@ -58,11 +77,13 @@ def _api_request(url: str, *, accept: str = "application/vnd.github+json"):
     except urllib.error.HTTPError as exc:
         if exc.code in (301, 302, 303, 307, 308):
             return exc
+        if exc.code == 407:
+            raise UpdateError("Proxy authentication is required to reach GitHub.", "proxy") from None
         if exc.code in (401, 403, 404):
-            raise UpdateError("The public GitHub release is unavailable") from None
-        raise UpdateError(f"GitHub update request failed (HTTP {exc.code})") from None
+            raise UpdateError("The public GitHub release is unavailable", "http") from None
+        raise UpdateError(f"GitHub update request failed (HTTP {exc.code})", "http") from None
     except (urllib.error.URLError, TimeoutError) as exc:
-        raise UpdateError("Could not reach GitHub to check updates") from exc
+        raise network_error(exc) from exc
 
 
 def latest_release() -> dict:
@@ -70,33 +91,33 @@ def latest_release() -> dict:
         try:
             release = json.loads(response.read(1_000_000))
         except (ValueError, UnicodeError) as exc:
-            raise UpdateError("GitHub returned invalid release metadata") from exc
+            raise UpdateError("GitHub returned invalid release metadata", "metadata") from exc
     if not isinstance(release, dict):
-        raise UpdateError("GitHub returned invalid release metadata")
+        raise UpdateError("GitHub returned invalid release metadata", "metadata")
     tag = str(release.get("tag_name", ""))
     tag_match = re.fullmatch(r"windows-[0-9]{8}-([0-9a-fA-F]{7,40})", tag)
     expected_release_url = f"{RELEASES}/tag/{tag}"
     if not tag_match or release.get("html_url") != expected_release_url:
-        raise UpdateError("GitHub returned an unexpected release")
+        raise UpdateError("GitHub returned an unexpected release", "metadata")
     assets = release.get("assets", [])
     if not isinstance(assets, list):
-        raise UpdateError("GitHub returned invalid release metadata")
+        raise UpdateError("GitHub returned invalid release metadata", "metadata")
     installer = next((asset for asset in assets if isinstance(asset, dict)
                       and INSTALLER_NAME.fullmatch(asset.get("name", ""))), None)
     if not installer:
-        raise UpdateError("Latest public release has no supported Windows x64 installer")
+        raise UpdateError("Latest public release has no supported Windows x64 installer", "asset")
     checksum = next((asset for asset in assets if isinstance(asset, dict)
                      and asset.get("name") == installer["name"] + ".sha256"), None)
     if not checksum:
-        raise UpdateError("Latest release is missing its installer SHA-256 file")
+        raise UpdateError("Latest release is missing its installer SHA-256 file", "asset")
     if not tag_match or not installer["name"].endswith(f"-{tag_match.group(1)}-x64.exe"):
-        raise UpdateError("Latest release tag does not match the Windows release format")
+        raise UpdateError("Latest release tag does not match the Windows release format", "metadata")
     for asset in (installer, checksum):
         expected_url = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}/releases/assets/{asset.get('id')}"
         if not re.fullmatch(r"[0-9]+", str(asset.get("id", ""))) or asset.get("url") != expected_url:
-            raise UpdateError("GitHub returned an unexpected release asset")
+            raise UpdateError("GitHub returned an unexpected release asset", "asset")
         if asset.get("state") not in (None, "uploaded"):
-            raise UpdateError("GitHub release asset is not available")
+            raise UpdateError("GitHub release asset is not available", "asset")
     current = build_version()
     latest_commit = tag_match.group(1)
     return {"current_version": current, "latest_version": tag,
@@ -127,7 +148,7 @@ def _asset_open(asset: dict):
             response = urllib.request.build_opener(_GithubAssetRedirect).open(
                 urllib.request.Request(signed_url, headers={"User-Agent": "ModuloAFarfalla-Updater"}), timeout=60)
         except (urllib.error.URLError, TimeoutError) as exc:
-            raise UpdateError("Could not download the verified release asset") from exc
+            raise network_error(exc) from exc
     return response
 
 

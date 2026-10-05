@@ -39,6 +39,10 @@ def test_saved_drawings_are_in_exported_pixels(tmp_path):
     asyncio.run(saved_drawings_export(tmp_path))
 
 
+def test_event_window_is_authoritative_for_clip_export(tmp_path):
+    asyncio.run(event_window_export(tmp_path))
+
+
 def test_team_roster_csv_import_is_idempotent_and_validates_before_write():
     asyncio.run(team_roster_csv_import())
 
@@ -124,6 +128,13 @@ async def saved_drawings_export(tmp_path):
         assert yellow(frame(frozen_path,1)[:160])==0
         assert yellow(frame(frozen_path,3)[:160])>1400
         assert yellow(frame(frozen_path,5.5)[:160])==0
+        # The reported bug: the pause must appear even when the event has no saved
+        # drawings -- it anchors to the event timestamp, not to a drawing frame.
+        bare_event=(await c.post(f"/api/matches/{match['id']}/events",json={"video_id":video['id'],"category_id":category['id'],"timestamp":3,"start":1,"end":5})).json()
+        bare=(await c.post('/api/exports/clip',json={**request,"event_id":bare_event['id'],"overlay":None,"freeze_seconds":3})).json()
+        assert (await wait(f"/api/jobs/{bare['id']}"))['status']=='completed'
+        bare_path=tmp_path/'bare.mp4';bare_path.write_bytes((await c.get(f"/api/jobs/{bare['id']}/download")).content)
+        assert abs(float(probe(bare_path)['format']['duration'])-7)<.15
         # Camera offsets must not move either the clip or its saved pause.
         assert (await c.patch(f"/api/videos/{video['id']}?time_offset=10")).status_code==200
         offset_event=(await c.post(f"/api/matches/{match['id']}/events",json={"video_id":video['id'],"category_id":category['id'],"timestamp":13})).json()
@@ -336,3 +347,37 @@ async def team_logos():
         await admin.post(f"/api/teams/{team['id']}/logo",files={"file":("logo.png",png,"image/png")})
         assert (await admin.delete(f"/api/teams/{team['id']}")).status_code==204
         assert not (TEST_ROOT/"storage"/"logos"/f"{team['id']}.png").exists()
+
+
+async def event_window_export(tmp_path):
+    from app.media import probe
+    media=tmp_path/"window.mp4"
+    subprocess.run(["ffmpeg","-v","error","-y","-f","lavfi","-i","color=c=green:s=640x360:r=25",
+                    "-t","6","-c:v","libx264","-threads","2","-pix_fmt","yuv420p",str(media)],check=True,capture_output=True)
+    async with lifespan(app),httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url="http://test") as c:
+        assert (await c.post('/api/auth/login',json={"email":"admin@example.com","password":"test-password"})).status_code==200
+        match=(await c.post('/api/matches',json={"date":"2026-10-04","home_team":"Window test","away_team":"Fixture"})).json()
+        video=(await c.post(f"/api/matches/{match['id']}/videos",files={"file":("window.mp4",media.read_bytes(),"video/mp4")})).json()
+        for _ in range(150):
+            state=(await c.get(f"/api/matches/{match['id']}")).json()['videos'][0]
+            if state['status'] in ('ready','failed'):break
+            await asyncio.sleep(.1)
+        assert state['status']=='ready',state
+        category=(await c.get('/api/categories')).json()[0]
+        event=(await c.post(f"/api/matches/{match['id']}/events",json={"video_id":video['id'],"category_id":category['id'],"timestamp":3,"start":1,"end":5})).json()
+        assert event['start']==1 and event['end']==5
+        patched=await c.patch(f"/api/events/{event['id']}",json={"start":1,"end":2.5})
+        assert patched.status_code==200,patched.text
+        assert patched.json()['start']==1 and patched.json()['end']==2.5
+        assert (await c.patch(f"/api/events/{event['id']}",json={"start":3,"end":2})).status_code==400
+        assert (await c.patch(f"/api/events/{event['id']}",json={"start":-1})).status_code==422
+        assert (await c.post(f"/api/matches/{match['id']}/events",json={"video_id":video['id'],"category_id":category['id'],"timestamp":4,"start":5,"end":4})).status_code==400
+        # Even when the client sends wider fixed seconds, an event clip covers the event window.
+        job=(await c.post('/api/exports/clip',json={"video_id":video['id'],"event_id":event['id'],"start":0,"end":6,"overlay":None,"include_annotations":False,"freeze_seconds":0})).json()
+        for _ in range(150):
+            job_state=(await c.get(f"/api/jobs/{job['id']}")).json()
+            if job_state['status'] in ('completed','failed'):break
+            await asyncio.sleep(.1)
+        assert job_state['status']=='completed',job_state
+        output=tmp_path/'window-export.mp4';output.write_bytes((await c.get(f"/api/jobs/{job['id']}/download")).content)
+        assert abs(float(probe(output)['format']['duration'])-1.5)<.3

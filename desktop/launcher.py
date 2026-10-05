@@ -24,7 +24,7 @@ TEXT = {
         "data": "Apri cartella dati", "quit": "Arresta e chiudi", "close": "Arrestare l'applicazione? Le elaborazioni in corso verranno interrotte.",
         "error": "Impossibile avviare. Consulta logs/desktop.log nella cartella dati.",
         "busy": "Un'altra istanza sta avviando l'applicazione. Attendi e riprova.",
-        "ai": "L'analisi IA non e' inclusa in questa prima distribuzione Windows. Tagging manuale ed esportazioni sono disponibili.",
+        "ai": "L'analisi IA non e' inclusa in questa distribuzione desktop. Tagging manuale ed esportazioni sono disponibili.",
     },
     "en": {
         "title": "Modulo a Farfalla",
@@ -32,7 +32,7 @@ TEXT = {
         "data": "Open data folder", "quit": "Stop and close", "close": "Stop the application? Running jobs will be interrupted.",
         "error": "Unable to start. See logs/desktop.log in the data folder.",
         "busy": "Another instance is starting. Wait and try again.",
-        "ai": "AI analysis is not included in this first Windows distribution. Manual tagging and exports are available.",
+        "ai": "AI analysis is not included in this desktop distribution. Manual tagging and exports are available.",
     },
 }
 
@@ -44,7 +44,12 @@ def resource_root() -> Path:
 def data_root() -> Path:
     if os.name == "nt":
         return Path(os.environ["LOCALAPPDATA"]) / "ModuloAFarfalla"
-    return Path.home() / ".local" / "share" / "modulo-a-farfalla"
+    override = os.environ.get("MODULO_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
+    return base / "modulo-a-farfalla"
 
 
 def atomic_json(path: Path, value: dict) -> None:
@@ -146,8 +151,17 @@ def configure_environment(root: Path, config: dict) -> None:
     }
     os.environ.update(environment)
     binary_root = resource_root() / "ffmpeg"
-    if binary_root.exists():
+    if binary_root.is_dir():
         os.environ["PATH"] = str(binary_root) + os.pathsep + os.environ.get("PATH", "")
+        # The bundled FFmpeg resolves libva.so.2 at runtime; prefer the bundled
+        # copy so VA-API keeps working on hosts with an older system libva.
+        os.environ["LD_LIBRARY_PATH"] = str(binary_root) + (os.pathsep + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")
+    font_config = resource_root() / "fontconfig" / "fonts.conf"
+    if font_config.is_file():
+        # Static FFmpeg builds cannot resolve system fonts without an explicit
+        # fontconfig file; the bundled one references the bundled DejaVu fonts
+        # relative to itself, so it also works from a read-only mount.
+        os.environ["FONTCONFIG_FILE"] = str(font_config)
     os.chdir(root)
 
 
@@ -210,7 +224,7 @@ def initialize_local_user(config: dict) -> str:
 
 def create_application(frontend: Path, application_id: str, origin: str, language: str = "it",
                        local_user_email: str = DESKTOP_USER_EMAIL,
-                       shutdown=None):
+                       shutdown=None, diagnostics=None):
     from app.main import app
     from fastapi import Request
     from fastapi.responses import FileResponse, JSONResponse
@@ -220,6 +234,7 @@ def create_application(frontend: Path, application_id: str, origin: str, languag
 
     @app.middleware("http")
     async def local_requests_only(request: Request, call_next):
+        started = time.monotonic()
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             if request.headers.get("origin") not in {None, origin} or request.headers.get("sec-fetch-site") == "cross-site":
                 return JSONResponse({"detail": "Cross-site request denied"}, status_code=403)
@@ -228,6 +243,12 @@ def create_application(frontend: Path, application_id: str, origin: str, languag
         if request.method == "POST" and request.url.path == "/api/auth/login":
             return JSONResponse({"detail": "Login is not used by the local desktop edition"},status_code=404)
         response = await call_next(request)
+        if diagnostics and request.url.path.startswith("/api/"):
+            operation = "write" if request.method not in {"GET", "HEAD"} else "read"
+            event = "api_failed" if response.status_code >= 500 else ("api_write" if operation == "write" else "api_request")
+            diagnostics.event(event, operation=operation, status=response.status_code,
+                              duration_ms=int((time.monotonic() - started) * 1000),
+                              error_code="server" if response.status_code >= 500 else "unknown")
         from app.db import SessionLocal
         from app.models import User
         from app.security import make_token
@@ -254,16 +275,53 @@ def create_application(frontend: Path, application_id: str, origin: str, languag
                 "ai_bundled": False, "video": video}
 
     from desktop import update
+    from desktop.diagnostics import PROFILES
+
+    @app.get("/desktop/diagnostics/profile", include_in_schema=False)
+    def diagnostics_profile():
+        return {"profile": diagnostics.profile() if diagnostics else "production"}
+
+    @app.put("/desktop/diagnostics/profile", include_in_schema=False)
+    def diagnostics_set_profile(payload: dict):
+        if not diagnostics or set(payload) != {"profile"} or payload["profile"] not in PROFILES:
+            return JSONResponse({"detail": "Invalid diagnostics profile"}, status_code=422)
+        diagnostics.set_profile(payload["profile"])
+        return {"profile": diagnostics.profile()}
+
+    @app.post("/desktop/diagnostics/export", include_in_schema=False)
+    def diagnostics_export():
+        from fastapi.responses import Response
+        from desktop.update import build_version
+        content = diagnostics.export(build_version()) if diagnostics else b""
+        return Response(content, media_type="application/zip", headers={
+            "Content-Disposition": 'attachment; filename="modulo-a-farfalla-diagnostics.zip"',
+            "Cache-Control": "no-store"})
+
+    @app.post("/desktop/diagnostics/client-event", include_in_schema=False)
+    def diagnostics_client_event(payload: dict):
+        if set(payload) != {"event"} or payload["event"] not in {"client_failed", "client_action"}:
+            return JSONResponse({"detail": "Invalid event"}, status_code=422)
+        if diagnostics:
+            diagnostics.event(payload["event"])
+        return {"ok": True}
 
     @app.get("/desktop/update/check", include_in_schema=False)
     def update_check():
         try:
-            return update.public_release(update.latest_release())
+            release = update.public_release(update.latest_release())
+            if diagnostics:
+                diagnostics.event("update_check", operation="update")
+            return release
         except update.UpdateError as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=503)
+            if diagnostics:
+                diagnostics.event("update_failed", operation="update", error_code=exc.code)
+            return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=503)
 
     @app.post("/desktop/update/install", include_in_schema=False)
     def install_update():
+        if os.environ.get("MODULO_PACKAGER") in {"electron", "appimage"}:
+            return JSONResponse({"detail": "Use the release link for this preview build", "code": "unsupported"},
+                                status_code=503)
         try:
             installer = update.download_verified_update()
             update.start_update_helper(installer)
@@ -272,7 +330,10 @@ def create_application(frontend: Path, application_id: str, origin: str, languag
             return {"started": True}
         except (update.UpdateError, OSError, ValueError, KeyError, TypeError) as exc:
             detail = str(exc) if isinstance(exc, update.UpdateError) else "Update download or installation could not be prepared"
-            return JSONResponse({"detail": detail}, status_code=503)
+            code = exc.code if isinstance(exc, update.UpdateError) else "unexpected"
+            if diagnostics:
+                diagnostics.event("update_failed", operation="update", error_code=code)
+            return JSONResponse({"detail": detail, "code": code}, status_code=503)
 
     app.mount("/assets", StaticFiles(directory=frontend / "assets"), name="desktop-assets")
 
@@ -307,6 +368,13 @@ def open_existing_instance(root: Path, config: dict, *, browse: bool = True) -> 
         return False
 
 
+def open_path(path: Path) -> None:
+    if os.name == "nt":
+        os.startfile(path)
+    else:
+        webbrowser.open(path.resolve().as_uri())
+
+
 def run_server(root: Path, config: dict, *, headless: bool = False, ready_file: Path | None = None) -> None:
     import uvicorn
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -316,9 +384,11 @@ def run_server(root: Path, config: dict, *, headless: bool = False, ready_file: 
     frontend = resource_root() / ("frontend" if getattr(sys, "frozen", False) else "frontend/dist")
     if not (frontend / "index.html").is_file():
         raise RuntimeError("Frontend build is missing")
+    from desktop.diagnostics import Diagnostics
+    diagnostics = Diagnostics(root)
     app = create_application(frontend, config["application_id"], origin, config["language"],
                              local_user_email=config.get("analyst_email",DESKTOP_USER_EMAIL),
-                             shutdown=lambda: setattr(server, "should_exit", True))
+                             shutdown=lambda: setattr(server, "should_exit", True), diagnostics=diagnostics)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, workers=1,
                                          proxy_headers=False, access_log=False, log_config=None))
     atomic_json(root / "instance.json", {"port": port})
@@ -339,8 +409,13 @@ def run_server(root: Path, config: dict, *, headless: bool = False, ready_file: 
     window.resizable(False, False)
     state = tk.StringVar(value=text["starting"])
     ttk.Label(window, textvariable=state, font=("Segoe UI", 12)).pack(padx=24, pady=16)
-    ttk.Button(window, text=text["open"], command=lambda: webbrowser.open(origin)).pack(padx=24, pady=6, fill="x")
-    ttk.Button(window, text=text["data"], command=lambda: os.startfile(root)).pack(padx=24, pady=6, fill="x")
+    def open_application():
+        # Never block the GUI thread on the browser process: xdg-open can take
+        # seconds to return and the user would see the button 'not open'.
+        threading.Thread(target=webbrowser.open, args=(origin,), daemon=True).start()
+    open_button = ttk.Button(window, text=text["open"], command=open_application, state="disabled")
+    open_button.pack(padx=24, pady=6, fill="x")
+    ttk.Button(window, text=text["data"], command=lambda: open_path(root)).pack(padx=24, pady=6, fill="x")
     ttk.Label(window, text=text["ai"], wraplength=400).pack(padx=24, pady=12)
     thread = threading.Thread(target=lambda: server.run(sockets=[sock]), daemon=True)
     thread.start()
@@ -360,7 +435,8 @@ def run_server(root: Path, config: dict, *, headless: bool = False, ready_file: 
     def wait_ready():
         if server.started:
             state.set(text["ready"])
-            webbrowser.open(origin)
+            open_button.config(state="normal")
+            open_application()
             window.after(250, monitor_server)
         elif not thread.is_alive():
             messagebox.showerror(text["title"], text["error"])

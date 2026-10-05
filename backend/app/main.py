@@ -13,12 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 from .config import settings
 from .db import Base, SessionLocal, engine, get_db
 from .jobs import analyze, export_clip, export_highlight, launch, transcode
-from .media import disk_has_space, initialize_storage, remove_video_files, safe_path
-from .models import AIJob, AISuggestion, Annotation, Category, Event, EventPlayer, ExternalIdentity, Job, JobStatus, LeagueCompetition, LeagueFixture, LeagueStanding, Match, MatchPlayer, OfficialPlayerStat, PitchCalibration, Player, PlayerTrack, Playlist, Presentation, PresentationItem, Role, SuggestionStatus, Team, Template, TrackingJob, User, Video
+from .media import disk_has_space, initialize_storage, remove_video_files, request_encode_cancel, safe_path
+from .models import AIJob, AISuggestion, Annotation, Category, Event, EventPlayer, ExternalIdentity, Job, JobStatus, LeagueCompetition, LeagueFixture, LeagueStanding, LeagueTeamMapping, Match, MatchPlayer, OfficialPlayerStat, PitchCalibration, Player, PlayerTrack, Playlist, Presentation, PresentationItem, Role, SuggestionStatus, Team, Template, TrackingJob, User, Video
 from .security import admin_user, coach_user, current_user, hash_password, make_token, verify_password
 from .action_spotting import CATEGORIES as SPOTTING_CATEGORIES
 from .league import pfs as pfs_module
@@ -93,8 +94,8 @@ class MatchIn(InModel):
     template_id: str | None = None; notes: str = ""; attacking_direction: str = "left-to-right"; squad: list[MatchPlayerIn] = []
 class CategoryIn(InModel): name: str; icon: str = "•"; shortcut: str | None = None; order: int = 0; enabled: bool = True; pre_roll: float = 5; post_roll: float = 5; metadata_schema: dict = {}
 class EventPlayerIn(InModel): player_id: str; role: str = "actor"
-class EventIn(InModel): video_id: str; category_id: str; timestamp: float = Field(ge=0); start: float | None = None; end: float | None = None; player_id: str | None = None; players: list[EventPlayerIn] = []; team: str | None = None; team_id: str | None = None; note: str = ""; tags: list[str] = []; metadata: dict = {}; pitch_x: float | None = Field(None,ge=0,le=1); pitch_y: float | None = Field(None,ge=0,le=1)
-class EventPatch(InModel): note: str | None = None; tags: list[str] | None = None; player_id: str | None = None; players: list[EventPlayerIn] | None = None; team: str | None = None; team_id: str | None = None; metadata: dict | None = None; pitch_x: float | None = Field(None,ge=0,le=1); pitch_y: float | None = Field(None,ge=0,le=1)
+class EventIn(InModel): video_id: str; category_id: str; timestamp: float = Field(ge=0); start: float | None = Field(None,ge=0); end: float | None = Field(None,ge=0); player_id: str | None = None; players: list[EventPlayerIn] = []; team: str | None = None; team_id: str | None = None; note: str = ""; tags: list[str] = []; metadata: dict = {}; pitch_x: float | None = Field(None,ge=0,le=1); pitch_y: float | None = Field(None,ge=0,le=1)
+class EventPatch(InModel): note: str | None = None; tags: list[str] | None = None; player_id: str | None = None; players: list[EventPlayerIn] | None = None; team: str | None = None; team_id: str | None = None; metadata: dict | None = None; pitch_x: float | None = Field(None,ge=0,le=1); pitch_y: float | None = Field(None,ge=0,le=1); start: float | None = Field(None,ge=0); end: float | None = Field(None,ge=0)
 class AnnotationIn(InModel): timestamp: float; shapes: list[dict]; coordinate_mode: str = "screen"; start: float | None = None; end: float | None = None
 class PlaylistIn(InModel): name: str; event_ids: list[str]
 class ClipOverlay(InModel): header: str = ""; minute: str = ""; team: str = ""; player: str = ""; note: str = ""; pitch_x: float | None = None; pitch_y: float | None = None
@@ -205,7 +206,14 @@ async def teams(db: Session=Depends(get_db), _=Depends(current_user)):
 
 @app.post("/api/teams")
 async def create_team(data: TeamIn, db: Session=Depends(get_db), _=Depends(coach_user)):
-    values=data.model_dump();values["name"]=values["name"].strip();team=Team(**values); db.add(team); db.commit(); return obj(team,players=[],has_logo=bool(team.logo_path))
+    values=data.model_dump();values["name"]=values["name"].strip()
+    if db.scalar(select(Team).where(func.lower(Team.name)==values["name"].lower())):
+        raise HTTPException(409,f"A team named '{values['name']}' already exists")
+    team=Team(**values); db.add(team)
+    try: db.commit()
+    except IntegrityError:
+        db.rollback(); raise HTTPException(409,f"A team named '{values['name']}' already exists") from None
+    return obj(team,players=[],has_logo=bool(team.logo_path))
 
 TEAM_CSV_MAX_BYTES=5*1024*1024
 TEAM_CSV_MAX_ROWS=2000
@@ -287,8 +295,14 @@ async def import_teams_csv(file:UploadFile=File(...),db:Session=Depends(get_db),
 async def update_team(team_id:str,data:TeamIn,db:Session=Depends(get_db),_=Depends(coach_user)):
     team=db.get(Team,team_id)
     if not team:raise HTTPException(404,"Team not found")
-    for key,value in data.model_dump().items():setattr(team,key,value)
-    db.commit();return obj(team,players=[obj(p) for p in team.players],has_logo=bool(team.logo_path))
+    values=data.model_dump();values["name"]=values["name"].strip()
+    if db.scalar(select(Team).where(Team.id!=team.id,func.lower(Team.name)==values["name"].lower())):
+        raise HTTPException(409,f"A team named '{values['name']}' already exists")
+    for key,value in values.items():setattr(team,key,value)
+    try: db.commit()
+    except IntegrityError:
+        db.rollback(); raise HTTPException(409,f"A team named '{values['name']}' already exists") from None
+    return obj(team,players=[obj(p) for p in team.players],has_logo=bool(team.logo_path))
 
 TEAM_LOGO_TYPES={"image/png":"png","image/jpeg":"jpg","image/webp":"webp"}
 TEAM_LOGO_MAX_BYTES=2_000_000
@@ -405,10 +419,10 @@ async def league_teams(competition_id:str,season:str="2026",_=Depends(coach_user
         raise HTTPException(502, f"Provider not available: {exc}")
 
 @app.get("/api/league/roster")
-async def league_roster(team_id:str,season:str="2026",_=Depends(coach_user)):
+async def league_roster(team_id:str,season:str="2026",competition_id:str|None=None,_=Depends(coach_user)):
     try:
         prov = pfs_module.PragueFootballAssociationProvider(season=season)
-        return [r.__dict__ for r in prov.get_roster(team_id)]
+        return [r.__dict__ for r in prov.get_roster(team_id, competition_id=competition_id)]
     except Exception as exc:
         raise HTTPException(502, f"Provider not available: {exc}")
 
@@ -417,12 +431,31 @@ async def league_import(competition_id:str,season:str="2026",map_team:str="{}",i
     try:
         import json
         mapping = json.loads(map_team) if map_team else {}
+        if not isinstance(mapping, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
+            raise HTTPException(422, "Invalid team mapping")
         result = import_competition("pfs", season, competition_id, map_team=mapping,
                                     import_rosters=import_rosters)
         return {"ok": True, "competition": {"id": result.id, "name": result.name,
                                             "teams": len(result.teams)}}
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(502, f"Provider not available: {exc}")
+
+@app.get("/api/league/mappings")
+async def league_mappings(competition_id:str,season:str="2026",_=Depends(coach_user),db:Session=Depends(get_db)):
+    rows=db.scalars(select(LeagueTeamMapping).where(
+        LeagueTeamMapping.provider=="pfs", LeagueTeamMapping.season==season,
+        LeagueTeamMapping.competition_external_id==competition_id)).all()
+    return {row.team_external_id:row.local_team_id for row in rows}
+
+@app.get("/api/league/legacy-mappings")
+async def league_legacy_mappings(_=Depends(coach_user),db:Session=Depends(get_db)):
+    rows=db.scalars(select(ExternalIdentity).where(
+        ExternalIdentity.provider=="pfs",ExternalIdentity.entity_type=="team")).all()
+    return [row.external_id for row in rows]
 
 @app.get("/api/league/synced")
 async def league_synced(_=Depends(coach_user)):
@@ -604,7 +637,12 @@ async def update_match(match_id:str,data:MatchIn,db:Session=Depends(get_db),_=De
 async def delete_match(match_id:str,db:Session=Depends(get_db),_=Depends(coach_user)):
     m=db.get(Match,match_id)
     if not m: raise HTTPException(404,"Match not found")
-    for v in m.videos: remove_video_files(v.original_path,v.proxy_path,v.thumbnail_path)
+    # Stop any in-flight FFmpeg encode for these videos before their rows go
+    # away; otherwise the worker would commit onto deleted rows and leave an
+    # orphan FFmpeg process running.
+    for v in m.videos:
+        request_encode_cancel(v.id)
+        remove_video_files(v.original_path,v.proxy_path,v.thumbnail_path)
     db.delete(m); db.commit()
 
 ALLOWED_TYPES={"video/mp4","video/quicktime","video/x-matroska","video/webm","application/octet-stream"}
@@ -770,6 +808,7 @@ async def create_event(match_id:str,data:EventIn,db:Session=Depends(get_db),user
     active_ai=db.scalar(select(AIJob.id).where(AIJob.video_id==video.id,AIJob.status.in_([JobStatus.queued,JobStatus.running])).limit(1))
     if active_ai:raise HTTPException(409,"AI analysis is running; event creation is locked until it completes")
     values=data.model_dump(); metadata=values.pop("metadata");players=values.pop("players")
+    if values.get("start") is not None and values.get("end") is not None and values["end"]<=values["start"]: raise HTTPException(400,"Invalid event window: end must be greater than start")
     if values.get("team_id"):
         team=db.get(Team,values["team_id"])
         if not team:raise HTTPException(400,"Invalid team")
@@ -787,6 +826,8 @@ async def update_event(event_id:str,data:EventPatch,db:Session=Depends(get_db),_
     e=db.get(Event,event_id)
     if not e: raise HTTPException(404,"Event not found")
     values=data.model_dump(exclude_unset=True);players=values.pop("players",None)
+    new_start=values.get("start",e.start);new_end=values.get("end",e.end)
+    if new_start is not None and new_end is not None and new_end<=new_start: raise HTTPException(400,"Invalid event window: end must be greater than start")
     if "metadata" in values: e.metadata_=values.pop("metadata")
     for k,v in values.items(): setattr(e,k,v)
     if e.team_id:
@@ -835,10 +876,14 @@ async def export_playlist(playlist_id:str,db:Session=Depends(get_db),_=Depends(c
 @app.post("/api/exports/clip")
 async def clip(data:ExportIn,db:Session=Depends(get_db),_=Depends(coach_user)):
     if not db.get(Video,data.video_id): raise HTTPException(404,"Video not found")
-    if data.end <= data.start or (data.start < 0 and not data.event_id): raise HTTPException(400,"Invalid clip range")
     if data.event_id:
         event=db.get(Event,data.event_id)
         if not event or event.video_id!=data.video_id: raise HTTPException(400,"Event does not belong to this video")
+        # Event clips always cover the window saved on the event (start-end): the
+        # coach-set interval is authoritative over any ad-hoc client seconds.
+        if event.start is not None and event.end is not None:
+            data.start,data.end=event.start,event.end
+    if data.end <= data.start or (data.start < 0 and not data.event_id): raise HTTPException(400,"Invalid clip range")
     j=Job(kind="clip",payload=data.model_dump());db.add(j);db.commit();launch(export_clip,j.id);return obj(j)
 
 @app.get("/api/jobs/{job_id}")

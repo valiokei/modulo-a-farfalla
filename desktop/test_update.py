@@ -1,5 +1,7 @@
 import hashlib
 import io
+import socket
+import ssl
 import sys
 from pathlib import Path
 import urllib.error
@@ -84,8 +86,36 @@ def test_public_api_network_failure_is_reported(monkeypatch):
         def open(self, *_a, **_k):
             raise urllib.error.URLError("offline")
     monkeypatch.setattr(update.urllib.request, "build_opener", lambda *_: Opener())
-    with pytest.raises(update.UpdateError, match="Could not reach GitHub"):
+    with pytest.raises(update.UpdateError, match="api.github.com"):
         update._api_request(update.API + "/releases/latest")
+
+
+@pytest.mark.parametrize("reason,code", [
+    ("proxy connection refused", "proxy"),
+    (TimeoutError(), "timeout"),
+    ("connection timed out", "timeout"),
+    (socket.gaierror(-2, "host not found"), "dns"),
+    (ssl.SSLError("certificate verify failed"), "tls"),
+])
+def test_network_failure_categories(reason, code):
+    assert update.network_error(urllib.error.URLError(reason)).code == code
+
+
+def test_invalid_release_has_distinct_error_code(monkeypatch):
+    monkeypatch.setattr(update, "_api_request", lambda *_a, **_k: Response(b"not json"))
+    with pytest.raises(update.UpdateError) as caught:
+        update.latest_release()
+    assert caught.value.code == "metadata"
+
+
+def test_http_proxy_auth_has_distinct_error_code(monkeypatch):
+    class Opener:
+        def open(self, *_a, **_k):
+            raise urllib.error.HTTPError(update.API, 407, "Proxy Authentication Required", {}, None)
+    monkeypatch.setattr(update.urllib.request, "build_opener", lambda *_: Opener())
+    with pytest.raises(update.UpdateError) as caught:
+        update._api_request(update.API + "/releases/latest")
+    assert caught.value.code == "proxy"
 
 
 def test_release_requires_exact_windows_tag_asset_pair(monkeypatch):

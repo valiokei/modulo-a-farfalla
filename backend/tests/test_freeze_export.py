@@ -54,10 +54,25 @@ def test_real_freeze_insert_preserves_motion_and_audio(tmp_path,monkeypatch,at,a
     assert not list(tmp_path.glob('*-ink-*'))
 
 
-def test_freeze_validation_and_no_annotations(monkeypatch):
+def test_freeze_validation_and_anchors(monkeypatch):
     monkeypatch.setattr('app.telestration.probe',lambda _:pytest.fail('Must not probe'))
     assert annotation_freeze(None,Path('source'),0,3,3) is None
     for seconds in (-1,11,float('nan')):
         with pytest.raises(ValueError):annotation_freeze(None,'source',0,3,seconds)
-    annotation=SimpleNamespace(timestamp=9,shapes=[{}])
-    with pytest.raises(ValueError,match='outside'):annotation_freeze(annotation,'source',0,3,3)
+    # A requested pause anchors to the event timestamp even without drawings,
+    # and a stale drawing timestamp is clamped inside the clip, not dropped.
+    monkeypatch.setattr('app.telestration.probe',lambda _:{"streams":[]})
+    assert annotation_freeze(None,'source',0,3,2,event=SimpleNamespace(timestamp=1.5))==(1.5,2,False)
+    stale=annotation_freeze(SimpleNamespace(timestamp=9,shapes=[{}]),'source',0,3,2)
+    assert stale is not None and stale[1:]==(2,False) and stale[0]==pytest.approx(2.96)
+
+
+def test_freeze_without_active_drawings_keeps_the_hold(tmp_path,monkeypatch):
+    monkeypatch.setattr('app.telestration.probe',lambda _: {"streams":[{"codec_type":"video","width":640,"height":360}]})
+    event=SimpleNamespace(start=0,end=4,timestamp=1)
+    annotation=SimpleNamespace(coordinate_mode="screen",start=0,end=4,shapes=[
+        {"type":"pen","points":[[.1,.3],[.8,.3]],"color":"#ffdf36","start":2,"end":3}])
+    # The only drawing appears from t=2, after the hold at t=1: the pause must
+    # still export, simply without ink on the frozen frame.
+    with annotation_layers(annotation,event,Path("original.mp4"),0,4,tmp_path/"clip.mp4",freeze=(1,2,False)) as layers:
+        assert layers==[]

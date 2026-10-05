@@ -60,7 +60,7 @@ def main():
         with httpx.Client(base_url=url, timeout=60) as client:
             health = client.get("/desktop/health").json()
             assert health["workers"] == 1
-            assert health["video"]["selected"] in {"cpu", "nvidia", "intel", "amd"}
+            assert health["video"]["selected"] in {"cpu", "nvidia", "intel", "amd", "vaapi"}
             if os.name == "nt":
                 assert len(health["video"]["encoders"]) == 3
             assert client.get("/desktop/health").json()["ai_bundled"] is False
@@ -78,7 +78,7 @@ def main():
             assert client.post("/api/auth/login", json=login).status_code == 404
             assert client.post("/api/ai/jobs", json={"video_id": "absent"}).status_code == 503
             match = client.post("/api/matches", json={"date": "2026-01-01", "home_team": "Local Home", "away_team": "Local Away"}).json()
-            if executable:
+            if executable and os.name == "nt":
                 ffmpeg = executable.parent / "_internal" / "ffmpeg" / "ffmpeg.exe"
             else:
                 ffmpeg = "ffmpeg"
@@ -146,15 +146,29 @@ def main():
             # This source box disappears at .8s; with a 2s hold it disappears at 2.8s.
             assert read_frame(exported,2)[15:25,200:260,0].mean()>150
             assert read_frame(exported,3)[15:25,200:260,0].mean()<100
-            ffprobe = executable.parent/'_internal'/'ffmpeg'/'ffprobe.exe' if executable else 'ffprobe'
+            ffprobe = executable.parent/'_internal'/'ffmpeg'/'ffprobe.exe' if executable and os.name == 'nt' else 'ffprobe'
             duration=subprocess.run([str(ffprobe),'-v','error','-show_entries','format=duration',
                 '-of','default=nw=1:nk=1',str(exported)],capture_output=True,text=True,check=True,timeout=30).stdout
             assert abs(float(duration)-4)<.15
             print('PASS: installed export freezes the saved frame for 2s then resumes, without altering originals')
+            # The reported bug: a requested pause must appear even when the event
+            # has no saved drawings (it anchors to the event timestamp).
+            bare_event = client.post(f"/api/matches/{match['id']}/events", json={
+                "video_id": video_id, "category_id": category["id"], "timestamp": 1, "start": 0, "end": 2}).json()
+            bare = client.post("/api/exports/clip", json={
+                "video_id": video_id, "event_id": bare_event["id"], "start": 0, "end": 2, "freeze_seconds": 2}).json()
+            wait_for(client, f"/api/jobs/{bare['id']}", "status", "completed")
+            bare_path = root / "bare.mp4"
+            bare_path.write_bytes(client.get(f"/api/jobs/{bare['id']}/download").content)
+            bare_duration=subprocess.run([str(ffprobe),'-v','error','-show_entries','format=duration',
+                '-of','default=nw=1:nk=1',str(bare_path)],capture_output=True,text=True,check=True,timeout=30).stdout
+            assert abs(float(bare_duration)-4)<.15, bare_duration
+            assert np.abs(read_frame(bare_path,1)-read_frame(bare_path,2)).mean()<1
+            print('PASS: pause appears on an event without saved drawings')
 
         with sqlite3.connect(root / "touchline.db") as database:
             assert database.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-            assert database.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0006"
+            assert database.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0007"
         assert list((root / "database-backups").glob("*.db")), "No verified pre-migration backup"
         print("PASS: packaged local server, authentication, Host/Origin protection, upload, proxy, range streaming, tagging, export, SQLite migration and backup")
     finally:

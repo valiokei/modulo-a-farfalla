@@ -1,8 +1,10 @@
+import ctypes
 import json
 import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -12,6 +14,44 @@ from .config import settings
 
 KINDS = ("originals", "proxies", "thumbnails", "clips", "exports", "logos")
 logger = logging.getLogger(__name__)
+_encodes_lock = threading.Lock()
+_encodes: dict[str, subprocess.Popen] = {}
+_cancelled_lock = threading.Lock()
+_cancelled: set[str] = set()
+
+
+class VideoDeleted(Exception):
+    """Raised when the video row disappeared while an encode was in flight."""
+
+
+def request_encode_cancel(key: str) -> None:
+    """Mark an in-flight encode for the given key as cancelled."""
+    with _cancelled_lock:
+        _cancelled.add(key)
+    kill_active_encodes(key)
+
+
+def kill_requested(key: str) -> bool:
+    with _cancelled_lock:
+        return key in _cancelled
+
+
+def kill_active_encodes(key: str) -> int:
+    """Stop a running encode registered under key; returns how many were killed.
+
+    Called before deleting a match so no FFmpeg process keeps transcoding a
+    video whose database row is about to disappear."""
+    with _encodes_lock:
+        proc = _encodes.get(key)
+    if not proc or proc.poll() is not None:
+        return 0
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+    return 1
 
 
 def initialize_storage() -> None:
@@ -46,25 +86,57 @@ def subprocess_options() -> dict:
     return {"preexec_fn": _low_priority}
 
 
-def run_ffmpeg(args: list[str], timeout: int = 12 * 3600, progress_duration: float | None = None, progress_callback=None) -> None:
+def run_ffmpeg(args: list[str], timeout: int = 12 * 3600, progress_duration: float | None = None, progress_callback=None, encode_key: str | None = None) -> None:
     command=["ffmpeg","-nostdin","-hide_banner","-loglevel","error","-y"]
     if progress_duration and progress_callback:command += ["-progress","pipe:1","-nostats"]
     if not progress_duration or not progress_callback:
         proc=subprocess.run([*command,*args],capture_output=True,text=True,timeout=timeout,**subprocess_options())
         if proc.returncode:raise RuntimeError(proc.stderr[-1000:] or "FFmpeg failed")
         return
+    if encode_key and kill_requested(encode_key):
+        with _cancelled_lock:
+            _cancelled.discard(encode_key)
+        raise VideoDeleted("Video was deleted before encoding started")
     proc=subprocess.Popen([*command,*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,**subprocess_options())
+    if encode_key:
+        with _encodes_lock:
+            _encodes[encode_key] = proc
     started=time.monotonic();last_percent=-1
     assert proc.stdout is not None
-    for line in proc.stdout:
-        if time.monotonic()-started>timeout:
-            proc.kill();raise TimeoutError("FFmpeg timed out")
-        key,_,value=line.strip().partition("=")
-        if key=="out_time_us" and value.isdigit():
-            percent=min(97,max(1,int((int(value)/1_000_000)/progress_duration*97)))
-            if percent!=last_percent:progress_callback(percent);last_percent=percent
-    stderr=proc.stderr.read() if proc.stderr else "";return_code=proc.wait()
-    if return_code:raise RuntimeError(stderr[-1000:] or "FFmpeg failed")
+    try:
+        for line in proc.stdout:
+            if time.monotonic()-started>timeout:
+                proc.kill();raise TimeoutError("FFmpeg timed out")
+            if encode_key and kill_requested(encode_key):
+                proc.terminate()
+                try: proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill(); proc.wait(timeout=5)
+                raise VideoDeleted("Video was deleted while encoding")
+            key,_,value=line.strip().partition("=")
+            if key=="out_time_us" and value.isdigit():
+                percent=min(97,max(1,int((int(value)/1_000_000)/progress_duration*97)))
+                if percent!=last_percent:progress_callback(percent);last_percent=percent
+        stderr=proc.stderr.read() if proc.stderr else "";return_code=proc.wait()
+        if encode_key and kill_requested(encode_key):
+            raise VideoDeleted("Video was deleted while encoding")
+        if return_code:raise RuntimeError(stderr[-1000:] or "FFmpeg failed")
+    except BaseException:
+        # A cancelled encode or a callback that raised (e.g. the video row was
+        # deleted) must never leave an orphan FFmpeg process behind.
+        if proc.poll() is None:
+            proc.terminate()
+            try: proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill(); proc.wait(timeout=5)
+        raise
+    finally:
+        if encode_key:
+            with _encodes_lock:
+                if _encodes.get(encode_key) is proc:
+                    del _encodes[encode_key]
+            with _cancelled_lock:
+                _cancelled.discard(encode_key)
 
 
 @lru_cache(maxsize=1)
@@ -78,12 +150,24 @@ def vaapi_available() -> bool:
 def nvenc_available() -> bool:
     if settings.media_acceleration.lower() not in {"auto", "nvidia", "nvenc"}:
         return False
-    check = subprocess.run(["ffmpeg", "-hide_banner", "-encoders", "nvidia"], capture_output=True, text=True, timeout=15, **subprocess_options())
-    has_encoder = "h264_nvenc" in check.stdout
     device = Path(settings.nvenc_device)
+    if os.name != "nt":
+        # A compiled-in encoder is not proof of a usable GPU: NVENC needs the
+        # NVIDIA control device and the driver at runtime. Hosts with AMD GPUs
+        # (empty /dev/nvidia0, no /dev/nvidiactl) must fall through to VA-API
+        # or CPU instead of selecting nvidia and failing every encode.
+        if not Path("/dev/nvidiactl").is_char_device():
+            return False
+        if device.exists() and not device.is_char_device():
+            return False
+        try:
+            ctypes.CDLL("libcuda.so.1")
+        except OSError:
+            return False
     if settings.nvidia_visible_devices.strip() not in ("", "all") and not device.exists():
         return False
-    return has_encoder
+    check = subprocess.run(["ffmpeg", "-hide_banner", "-encoders", "nvidia"], capture_output=True, text=True, timeout=15, **subprocess_options())
+    return "h264_nvenc" in check.stdout
 
 
 @lru_cache(maxsize=1)
@@ -139,7 +223,7 @@ def video_filter_args(filters=None, overlays=(), suffix=None, freeze=None) -> li
             "-filter_complex", ";".join(graph), "-map", "[composed]", "-map", audio]
 
 
-def encode_h264(source: Path | str, output: Path, *, start: float | None = None, end: float | None = None, filters: str | None = None, overlays=(), freeze=None, hardware_decode: bool = True, progress_duration: float | None = None, progress_callback=None) -> None:
+def encode_h264(source: Path | str, output: Path, *, start: float | None = None, end: float | None = None, filters: str | None = None, overlays=(), freeze=None, hardware_decode: bool = True, progress_duration: float | None = None, progress_callback=None, encode_key: str | None = None) -> None:
     seek = []
     if start is not None: seek += ["-ss", str(start)]
     if end is not None: seek += ["-to", str(end)]
@@ -157,24 +241,29 @@ def encode_h264(source: Path | str, output: Path, *, start: float | None = None,
             pre = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] if hardware_decode and not filters and not overlays and not freeze else []
             suffix = "format=yuv420p,hwupload_cuda" if filters or overlays or freeze else "scale_cuda=format=yuv420p" if hardware_decode else None
             args = [*seek, *pre, "-i", str(source), *video_filter_args(filters, overlays, suffix, freeze)]
-            run_ffmpeg([*args, "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19", "-c:a", "aac", "-movflags", "+faststart", str(output)],progress_duration=progress_duration,progress_callback=progress_callback)
+            run_ffmpeg([*args, "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19", "-c:a", "aac", "-movflags", "+faststart", str(output)],progress_duration=progress_duration,progress_callback=progress_callback,encode_key=encode_key)
             return
+        except VideoDeleted:
+            raise
         except Exception as exc:
             logger.warning("NVENC encode failed; using limited CPU fallback: %s", exc)
             output.unlink(missing_ok=True)
     elif backend == "vaapi":
         try:
             device = str(settings.vaapi_device)
-            if hardware_decode and not filters and not overlays and not freeze:
-                args = [*seek, "-hwaccel", "vaapi", "-hwaccel_device", device, "-hwaccel_output_format", "vaapi", "-i", str(source), "-map", "0:v:0", "-map", "0:a?", "-vf", "scale_vaapi=format=nv12"]
-            else:
-                args = [*seek, "-vaapi_device", device, "-i", str(source), *video_filter_args(filters, overlays, "format=nv12,hwupload", freeze)]
-            run_ffmpeg([*args, "-c:v", "h264_vaapi", "-qp", "24", "-profile:v", "high", "-c:a", "aac", "-movflags", "+faststart", str(output)],progress_duration=progress_duration,progress_callback=progress_callback)
+            # Decode in software (FFmpeg's multithreaded decoders, e.g. libdav1d
+            # for AV1) and upload frames to VA-API: measured on AMD VCN faster
+            # than -hwaccel vaapi, whose GPU decode serialises with the GPU
+            # encoder while software decode runs in parallel on idle CPU cores.
+            args = [*seek, "-vaapi_device", device, "-i", str(source), *video_filter_args(filters, overlays, "format=nv12,hwupload", freeze)]
+            run_ffmpeg([*args, "-c:v", "h264_vaapi", "-qp", "24", "-profile:v", "high", "-c:a", "aac", "-movflags", "+faststart", str(output)],progress_duration=progress_duration,progress_callback=progress_callback,encode_key=encode_key)
             return
+        except VideoDeleted:
+            raise
         except Exception as exc:
             logger.warning("VA-API encode failed; using limited CPU fallback: %s", exc)
             output.unlink(missing_ok=True)
-    run_ffmpeg([*seek, "-i", str(source), *video_filter_args(filters, overlays, freeze=freeze), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-threads", str(max(1, settings.ffmpeg_threads)), "-c:a", "aac", "-movflags", "+faststart", str(output)],progress_duration=progress_duration,progress_callback=progress_callback)
+    run_ffmpeg([*seek, "-i", str(source), *video_filter_args(filters, overlays, freeze=freeze), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-threads", str(max(1, settings.ffmpeg_threads)), "-c:a", "aac", "-movflags", "+faststart", str(output)],progress_duration=progress_duration,progress_callback=progress_callback,encode_key=encode_key)
 
     if windows_fallback:
         from .windows_gpu import record_operation
@@ -182,11 +271,11 @@ def encode_h264(source: Path | str, output: Path, *, start: float | None = None,
         logger.info("Windows encode completed using limited CPU fallback")
 
 
-def make_proxy(original: Path, proxy: Path, thumbnail: Path, progress_callback=None) -> float:
+def make_proxy(original: Path, proxy: Path, thumbnail: Path, progress_callback=None, encode_key: str | None = None) -> float:
     info = probe(original)
     duration = float(info["format"].get("duration", 0))
     if progress_callback:progress_callback(1)
-    encode_h264(original,proxy,progress_duration=duration,progress_callback=progress_callback)
+    encode_h264(original,proxy,progress_duration=duration,progress_callback=progress_callback,encode_key=encode_key)
     if progress_callback:progress_callback(98)
     run_ffmpeg(["-threads", str(max(1, settings.ffmpeg_threads)), "-ss", str(min(1, duration / 2)), "-i", str(original), "-frames:v", "1", "-vf", "scale=480:-2", str(thumbnail)])
     if progress_callback:progress_callback(100)

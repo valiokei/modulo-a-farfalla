@@ -78,13 +78,23 @@ def blend(base, layer):
     base[:, :, 3:4] = np.round(alpha * 255).astype(np.uint8)
 
 
-def annotation_freeze(annotation, source, start, end, seconds, time_offset=0):
+def annotation_freeze(annotation, source, start, end, seconds, time_offset: float = 0, event=None):
+    """The pause to insert, as (clip-relative instant, seconds, has_audio).
+
+    The hold anchors to the event timestamp -- the instant the coach tagged --
+    so a requested pause appears even when no drawing was saved on the event.
+    Without an event the saved drawing frame is the fallback. Either anchor is
+    clamped inside the clip: a requested pause must never be dropped silently.
+    """
     seconds = number(seconds)
     if not 0 <= seconds <= 10: raise ValueError("Freeze duration must be between 0 and 10 seconds")
-    if not seconds or not annotation or not annotation.shapes: return None
-    at = number(annotation.timestamp) - time_offset - start
-    if not 0 <= at < end - start:
-        raise ValueError("The saved drawing frame is outside the exported clip")
+    if not seconds: return None
+    anchor = number(getattr(event, "timestamp")) if event is not None and getattr(event, "timestamp", None) is not None \
+        else number(annotation.timestamp) if annotation is not None and getattr(annotation, "timestamp", None) is not None else None
+    if anchor is None: return None
+    duration = end - start
+    if duration <= 0: raise ValueError("Invalid clip range")
+    at = min(max(0.0, anchor - time_offset - start), max(0.0, duration - 0.04))
     has_audio = any(s.get("codec_type") == "audio" for s in probe(Path(source))["streams"])
     return at, seconds, has_audio
 
@@ -119,8 +129,6 @@ def annotation_layers(annotation, event, source, start, end, output, *, time_off
         else:
             window = (first - start, last - start)
         groups.setdefault(window, []).append(shape)
-    if freeze and not groups:
-        raise ValueError("No visible drawings at the saved frame; save drawings on a frame inside the event")
     if len(groups) > 32:
         raise ValueError("Too many distinct annotation time windows")
     with tempfile.TemporaryDirectory(prefix=f"{output.stem}-ink-", dir=output.parent) as directory:

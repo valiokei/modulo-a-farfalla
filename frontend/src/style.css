@@ -11,3 +11,5 @@
 .aiReview video{width:100%;border-radius:8px;background:#07100b}.suggestionList{max-height:300px;overflow:auto}.aiReview p{overflow-wrap:anywhere}
 .teamLogo{width:38px;height:38px;flex:0 0 38px;border-radius:10px;object-fit:contain;background:#fff;border:1px solid var(--line)}.teamLogo.large{width:56px;height:56px;flex-basis:56px;border-radius:14px}.teamLogo.mini{width:20px;height:20px;flex-basis:20px;border-radius:5px;border-width:1px}.teamStrip button .teamLogo{margin-bottom:6px}.matchNames{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
 .notice{margin:14px 0;padding:12px 14px;border:1px solid #b8d8bb;border-radius:8px;background:#eef8ef;color:#245b33}
+
+.controls button.active{color:var(--lime);background:#2a3a30}

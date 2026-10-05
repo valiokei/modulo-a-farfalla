@@ -17,9 +17,9 @@ import logging
 from dataclasses import dataclass, field
 from html import unescape
 from typing import Iterable
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlencode
 
-from .fetch import FetchClient
+from .fetch import FetchClient, ProviderUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,33 @@ def _clean(value: str) -> str:
     return " ".join(unescape(value).split())
 
 
+def leading_competition_id(value: str | None) -> str | None:
+    """Numeric competition id from a '753-9-liga-...' slug or a bare '753'."""
+    match = re.match(r"(\d+)", value or "")
+    return match.group(1) if match else None
+
+
+def _league_ids_on_page(html: str) -> set[str]:
+    return set(re.findall(r"id_league=(\d+)", html))
+
+
+def _check_league_page(html: str, expected: str | None, url: str, provider: str = "pfs") -> None:
+    """Refuse the HTTP-200 fallback pages served for wrong/malformed slugs.
+
+    fotbalpraha.cz answers a bad /souteze/zapasy/ slug with 200 and the page
+    of a different competition (observed: a bare `9-liga-...` slug returned the
+    A5B page of the 2018 season), which silently imported wrong fixtures.
+    """
+    if not expected:
+        return
+    found = _league_ids_on_page(html)
+    if found and expected not in found:
+        raise ProviderUnavailable(
+            f"{provider}: page {url} belongs to id_league={sorted(found)}, not {expected}; refusing fallback page")
+    if not found:
+        logger.warning("%s: no id_league marker on %s; cannot verify competition page", provider, url)
+
+
 class PragueFootballAssociationProvider:
     """Concrete provider for fotbalpraha.cz."""
 
@@ -129,7 +156,7 @@ class PragueFootballAssociationProvider:
             label = _clean(label)
             if not label or ("muži" not in label.lower() and "skupina" not in label.lower()):
                 continue
-            out.setdefault(cid, Competition(id=cid, name=label, season=self.season, slug=slug))
+            out.setdefault(cid, Competition(id=cid, name=label, season=self.season, slug=f"{cid}-{slug}"))
         return list(out.values())
 
     def get_competition(self, cid: str) -> Competition:
@@ -143,13 +170,100 @@ class PragueFootballAssociationProvider:
     def standings_url(self, cid: str) -> str:
         listing = self._client.get(f"{BASE}/souteze")
         slug = ""
-        m = re.search(rf'/souteze/tabulka/({re.escape(cid)})-([^"]+)"', listing)
+        m = re.search(rf'/souteze/tabulka/({re.escape(cid)})-([^"?]+)', listing)
         if m:
             slug = m.group(2)
         return f"{BASE}/souteze/tabulka/{cid}-{slug}?id_season={self.season}"
 
+    def resolve_competition_slug(self, cid: str) -> str:
+        """Canonical '<id>-<slug>' competition slug from the /souteze listing."""
+        listing = self._client.get(f"{BASE}/souteze")
+        match = re.search(rf'/souteze/tabulka/{re.escape(cid)}-([^"?]+)', listing)
+        if not match:
+            raise ProviderUnavailable(f"{self.provider_key}: competition {cid} missing from /souteze listing")
+        return f"{cid}-{match.group(1)}"
+
+    def _listing_entries(self) -> list[tuple[str, str]] | None:
+        """(id, slug) pairs from the /souteze listing; None when unfetchable."""
+        try:
+            listing = self._client.get(f"{BASE}/souteze")
+        except Exception as exc:
+            logger.warning("%s: /souteze listing unavailable for validation: %s",
+                           self.provider_key, exc)
+            return None
+        return re.findall(r'/souteze/tabulka/(\d+)-([^"?]+)', listing)
+
+    def match_competition_slug(self, value: str | None) -> str | None:
+        """Competition id for a slug that appears in the /souteze listing.
+
+        Resolves both the canonical '<id>-<slug>' form and the bare slug the
+        site's own links use (e.g. '9-liga-a5c-...' -> '753'). A leading
+        number alone is never trusted: unknown or unlisted slugs return None
+        instead of a guessed id.
+        """
+        value = (value or "").strip()
+        if not value:
+            return None
+        entries = self._listing_entries() or []
+        for cid, slug in entries:
+            if value == slug or value == f"{cid}-{slug}":
+                return cid
+        if re.fullmatch(r"\d+", value) and any(cid == value for cid, _ in entries):
+            return value
+        return None
+
+    def _verified_expected(self, value: str | None, league_id: str | None) -> str | None:
+        """Expected id_league for a page request, refusing unverifiable ids.
+
+        Validates the explicit league_id — or the leading number of `value` —
+        against the /souteze listing. This closes the HTTP-200 fallback bug:
+        a bare '9-liga-...' slug parses as id 9, and the foreign fallback
+        page the site serves for it also reports id_league=9, so only the
+        listing can tell them apart. Values without a leading number (e.g.
+        test/fixture slugs) keep the old permissive behaviour.
+        """
+        candidate = str(league_id) if league_id else leading_competition_id(value)
+        if not candidate:
+            return None
+        entries = self._listing_entries()
+        if entries is None:
+            raise ProviderUnavailable(
+                f"{self.provider_key}: cannot fetch the /souteze listing to verify "
+                f"competition id {candidate!r} for {value!r}; refusing an unverified page")
+        if any(candidate == cid for cid, _ in entries):
+            return candidate
+        raise ProviderUnavailable(
+            f"{self.provider_key}: competition id {candidate!r} from {value!r} is not in "
+            f"the /souteze listing; refusing an unverified page")
+
+    def _resolve_requested_competition(self, value: str, league_id: str | None) -> tuple[str, str | None]:
+        """Canonical url slug + validated competition id for a page request.
+
+        Bare slugs from the site's own links (e.g. '9-liga-a5c-...') are
+        rewritten to the canonical '<id>-<slug>' form. Anything whose id
+        cannot be verified against the /souteze listing raises
+        ProviderUnavailable instead of fetching a likely fallback page.
+        """
+        value = (value or "").strip()
+        entries = self._listing_entries() or []
+        for cid, slug in entries:
+            if value == slug or value == f"{cid}-{slug}":
+                if league_id and str(league_id) != cid:
+                    raise ProviderUnavailable(
+                        f"{self.provider_key}: league_id {league_id!r} does not match "
+                        f"listing id {cid} for {value!r}")
+                return f"{cid}-{slug}", cid
+        if re.fullmatch(r"\d+", value):
+            for cid, slug in entries:
+                if cid == value:
+                    return f"{cid}-{slug}", cid
+        return value, self._verified_expected(value, league_id)
+
     def get_teams(self, cid: str) -> list[Team]:
-        html = self._client.get(self.standings_url(cid))
+        expected = self._verified_expected(str(cid), None)
+        url = self.standings_url(cid)
+        html = self._client.get(url)
+        _check_league_page(html, expected, url, self.provider_key)
         teams: list[Team] = []
         # Parse each <tr> containing a /tym/ link
         for tr in re.findall(r"<tr>(.*?)</tr>", html, re.S):
@@ -206,8 +320,8 @@ class PragueFootballAssociationProvider:
                     return team
         raise ValueError(f"Team {tid} not found in season {self.season}")
 
-    def get_roster(self, tid: str) -> list[RosterEntry]:
-        html = self._client.get(self.team_url(tid))
+    def get_roster(self, tid: str, competition_id: str | None = None) -> list[RosterEntry]:
+        html = self._client.get(self.team_url(tid, competition_id=competition_id))
         rows: list[RosterEntry] = []
         seen = set()
         for tr in re.findall(r"<tr>(.*?)</tr>", html, re.S):
@@ -235,15 +349,19 @@ class PragueFootballAssociationProvider:
             ))
         return rows
 
-    def team_url(self, tid: str) -> str:
+    def team_url(self, tid: str, competition_id: str | None = None) -> str:
         # try to find slug from known competitions; fallback to `?season=` page
         slugs: dict[str, str] = {}
-        for cid in ("752", "753"):
+        for cid in ((competition_id,) if competition_id else ("752", "753")):
             for team in self.get_teams(cid):
                 slugs[team.id] = team.slug
         slug = slugs.get(tid, "")
         url = f"{BASE}/tym/{tid}-{slug}" if slug else f"{BASE}/tym/{tid}"
-        return url + (f"?season={self.season}" if slug else "")
+        params = {"id_season": self.season}
+        if competition_id:
+            params["id_league"] = competition_id
+            params["id_category"] = "1"
+        return f"{url}?{urlencode(params)}"
 
     def recent_results(self, tid: str, limit: int = 10) -> list[MatchResult]:
         """Recent results from the team page form widget (V/P + title with score)."""
@@ -346,13 +464,16 @@ class PragueFootballAssociationProvider:
                     result.events.append({"minute": time_txt, "home": home_txt, "away": away_txt})
         return result
 
-    def get_fixtures_rounds(self, competition_id, rounds=None):
+    def get_fixtures_rounds(self, competition_id, rounds=None, league_id=None):
         if rounds is None:
             rounds = list(range(1, 19))
+        canonical, expected = self._resolve_requested_competition(str(competition_id), league_id)
         out = []
         seen = set()
         for rnd in rounds:
-            html = self._client.get(BASE + "/souteze/zapasy/" + str(competition_id) + "?id_season=" + self.season + "&id_round=" + str(rnd))
+            url = BASE + "/souteze/zapasy/" + canonical + "?id_season=" + self.season + "&id_round=" + str(rnd)
+            html = self._client.get(url)
+            _check_league_page(html, expected, url, self.provider_key)
             for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S):
                 if "/zapas/" not in tr or "game_number" not in tr:
                     continue
@@ -389,11 +510,18 @@ class PragueFootballAssociationProvider:
                     url="", played=played, events=[],
                 ))
         return out
-    def get_fixtures(self, competition_id: str) -> list[MatchResult]:
-        """Full round of fixtures from the Zápasy page (played + upcoming)."""
-        html = self._client.get(
-            f"{BASE}/souteze/zapasy/{competition_id}?id_season={self.season}")
-        # Accept both the bare id and slugged urls; the caller passes the slug.
+    def get_fixtures(self, competition_id: str, league_id: str | None = None) -> list[MatchResult]:
+        """Whole season of fixtures from the Zápasy page (played + upcoming).
+
+        `id_round=999` is the site's "vše" (all rounds) selector; the plain
+        page only shows the current round. The /souteze-listing validation
+        rewrites bare slugs to their canonical form and refuses pages whose
+        competition cannot be verified (the HTTP-200 fallback bug).
+        """
+        canonical, expected = self._resolve_requested_competition(competition_id, league_id)
+        url = f"{BASE}/souteze/zapasy/{canonical}?id_season={self.season}&id_round=999"
+        html = self._client.get(url)
+        _check_league_page(html, expected, url, self.provider_key)
         results: list[MatchResult] = []
         seen = set()
         for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S):

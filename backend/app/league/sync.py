@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import (ExternalIdentity, LeagueCompetition, LeagueFixture,
+from ..models import (ExternalIdentity, LeagueCompetition, LeagueFixture, LeagueTeamMapping,
                       LeagueStanding, OfficialPlayerStat, Player, Team, now)
 from ..db import SessionLocal
 from . import pfs
@@ -95,32 +95,42 @@ def import_competition(provider: str, season: str, external_id: str, *,
     """Sync competition (standings/teams) and optionally rosters. Mutable: writes DB."""
     prov = pfs.PragueFootballAssociationProvider(season=season, force=force)
     comp_dto = prov.get_competition(external_id)
+    if map_team and set(map_team) - {team.id for team in comp_dto.teams}:
+        raise ValueError("Mapping contains a team outside the selected competition")
     with SessionLocal() as db:
         comp = upsert_competition(db, provider, comp_dto)
         db.flush()
         for team_dto in comp_dto.teams:
-            # Respect mapping: external id -> local team id, else create new local team
-            local_team_id = None
-            if map_team and team_dto.id in map_team:
-                local_team_id = map_team[team_dto.id]
-            elif db.scalar(select(ExternalIdentity).where(
-                    ExternalIdentity.provider == provider,
-                    ExternalIdentity.entity_type == TEAM_TYPE,
-                    ExternalIdentity.external_id == team_dto.id)):
-                ident = db.scalar(select(ExternalIdentity).where(
+            link = db.scalar(select(LeagueTeamMapping).where(
+                LeagueTeamMapping.provider == provider,
+                LeagueTeamMapping.season == season,
+                LeagueTeamMapping.competition_external_id == external_id,
+                LeagueTeamMapping.team_external_id == team_dto.id))
+            local_team_id = (map_team or {}).get(team_dto.id) or (link.local_team_id if link else None)
+            if not local_team_id:
+                legacy = db.scalar(select(ExternalIdentity).where(
                     ExternalIdentity.provider == provider,
                     ExternalIdentity.entity_type == TEAM_TYPE,
                     ExternalIdentity.external_id == team_dto.id))
-                local_team_id = ident.internal_entity_id
+                if legacy:
+                    raise ValueError(f"Select a local team for legacy club {team_dto.name} before importing")
             if local_team_id:
                 local_team = db.get(Team, local_team_id)
+                if not local_team:
+                    raise ValueError(f"Mapped local team is missing for {team_dto.name}")
             else:
+                if db.scalar(select(Team).where(Team.name == team_dto.name.strip())):
+                    raise ValueError(f"Select a local team for {team_dto.name} before importing this competition")
                 local_team = Team(name=team_dto.name.strip(), notes=f"Imported {provider} · {season}")
                 db.add(local_team)
                 db.flush()
                 local_team_id = local_team.id
-            _identity(db, provider, TEAM_TYPE, team_dto.id, local_team_id,
-                      season=season, competition_id=comp.id)
+            if link:
+                link.local_team_id = local_team_id
+            else:
+                db.add(LeagueTeamMapping(provider=provider, season=season,
+                    competition_external_id=external_id, team_external_id=team_dto.id,
+                    local_team_id=local_team_id))
             _fetch_team_logo(prov, team_dto, local_team)
             # upsert standings row
             standing = db.scalar(select(LeagueStanding).where(
@@ -147,7 +157,7 @@ def import_competition(provider: str, season: str, external_id: str, *,
             standing.red_cards = num(team_dto.cards_red)
 
             if import_rosters:
-                roster = prov.get_roster(team_dto.id)
+                roster = prov.get_roster(team_dto.id, competition_id=external_id)
                 for entry in roster:
                     player = db.scalar(select(Player).where(
                         Player.team_id == local_team_id, Player.name == entry.name))
@@ -157,12 +167,13 @@ def import_competition(provider: str, season: str, external_id: str, *,
                                         notes=f"Imported {provider} · {season}")
                         db.add(player)
                         db.flush()
-                    _identity(db, provider, PLAYER_TYPE, entry.player_id, player.id,
+                    _identity(db, provider, PLAYER_TYPE, f"{season}:{external_id}:{entry.player_id}", player.id,
                               season=season, competition_id=comp.id)
                     stat = db.scalar(select(OfficialPlayerStat).where(
                         OfficialPlayerStat.provider == provider,
                         OfficialPlayerStat.player_external_id == entry.player_id,
-                        OfficialPlayerStat.season == season))
+                        OfficialPlayerStat.season == season,
+                        OfficialPlayerStat.player_id == player.id))
                     def n(x):
                         try: return int(float(x)) if x else 0
                         except Exception: return 0
@@ -246,28 +257,42 @@ def sync_results(provider: str, season: str, *, team_external_id: str,
     return {"imported": saved, "results": [r.id for r in results]}
 
 
+def _canonical_slug(prov, cid: str | None, slug: str | None) -> str:
+    """Prefer the site's own '<id>-<slug>' form: a stored slug without its
+    numeric prefix makes the site serve a foreign fallback page."""
+    slug = slug or ""
+    if cid and slug.startswith(f"{cid}-"):
+        return slug
+    if cid:
+        try:
+            return prov.resolve_competition_slug(cid)
+        except Exception as exc:
+            logger.warning("competition slug resolution failed for %s: %s", cid, exc)
+    return slug or (cid or "")
+
+
 def sync_fixtures(provider: str, season: str, *, competition_slug: str,
                   competition_id: str | None = None, team_external_id: str | None = None) -> dict:
-    """Import the full fixture round (played + upcoming) for a whole competition."""
+    """Import the full fixture season (played + upcoming) for a whole competition."""
     prov = pfs.PragueFootballAssociationProvider(season=season)
-    fixtures = prov.get_fixtures(competition_slug)
+    # Never trust a leading number on its own: '9-liga-a5c-...' would read
+    # as competition id 9 and match the foreign fallback page the site
+    # serves for it. Bare slugs resolve through the /souteze listing;
+    # unknown ones stay unset so the provider refuses them instead of
+    # importing another season's fixtures.
+    cid = competition_id or prov.match_competition_slug(competition_slug)
+    slug = _canonical_slug(prov, cid, competition_slug)
+    if cid and not slug.startswith(f"{cid}-"):
+        return {"imported": 0, "error": f"cannot resolve a verified slug for competition {cid}"}
+    fixtures = prov.get_fixtures(slug, league_id=cid)
     saved = 0
     with SessionLocal() as db:
         comp_row = None
-        if competition_id:
+        if cid:
             comp_row = db.scalar(select(LeagueCompetition).where(
                 LeagueCompetition.provider == provider,
-                LeagueCompetition.external_id == competition_id,
+                LeagueCompetition.external_id == cid,
                 LeagueCompetition.season == season))
-        if not comp_row:
-            # derive from provided slug (contains the numeric id)
-            m = pfs.re.compile(r"^(\d+)")
-            ext = m.match(competition_slug) if competition_slug else None
-            if ext:
-                comp_row = db.scalar(select(LeagueCompetition).where(
-                    LeagueCompetition.provider == provider,
-                    LeagueCompetition.external_id == ext.group(1),
-                    LeagueCompetition.season == season))
         if not comp_row:
             return {"imported": 0, "error": "competition not found"}
         for fx in fixtures:
@@ -318,7 +343,11 @@ def sync_competition_fixtures(provider: str, season: str, *, competition_externa
     """Import the full schedule for ONE competition (round-aware). Optionally replaces existing rows."""
     from . import pfs as _pfs
     prov = _pfs.PragueFootballAssociationProvider(season=season)
-    fixtures = prov.get_fixtures_rounds(competition_slug, rounds=rounds)
+    cid = competition_external or prov.match_competition_slug(competition_slug)
+    slug = _canonical_slug(prov, cid, competition_slug)
+    if cid and not slug.startswith(f"{cid}-"):
+        return {"imported": 0, "error": f"cannot resolve a verified slug for competition {cid}"}
+    fixtures = prov.get_fixtures_rounds(slug, rounds=rounds, league_id=cid)
     saved = 0
     with SessionLocal() as db:
         comp = db.scalar(select(LeagueCompetition).where(

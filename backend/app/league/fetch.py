@@ -21,6 +21,23 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _last_request: dict[str, float] = {}
+_client_lock = threading.Lock()
+_http_client: httpx.Client | None = None
+
+
+def _client() -> httpx.Client:
+    """Shared pooled client: one TLS handshake per host instead of one per call.
+
+    The previous code built a fresh httpx.Client for every request, so every
+    provider call paid a full TLS handshake again — the bulk of the slow
+    "Loading competitions" wait on slower links.
+    """
+    global _http_client
+    with _client_lock:
+        if _http_client is None:
+            _http_client = httpx.Client(timeout=20, follow_redirects=True,
+                                        limits=httpx.Limits(max_keepalive_connections=8, max_connections=16))
+        return _http_client
 
 
 class ProviderUnavailable(Exception):
@@ -70,8 +87,7 @@ class FetchClient:
         for attempt in range(3):
             self._rate_wait(url)
             try:
-                with httpx.Client(timeout=20, follow_redirects=True, headers=self._headers) as client:
-                    resp = client.get(url)
+                resp = _client().get(url, headers=self._headers)
                 if resp.status_code in (403, 401, 429):
                     raise ProviderUnavailable(f"{self.provider} blocked automated access ({resp.status_code})")
                 resp.raise_for_status()
@@ -94,8 +110,7 @@ class FetchClient:
         for attempt in range(3):
             self._rate_wait(url)
             try:
-                with httpx.Client(timeout=20, follow_redirects=True, headers=self._headers) as client:
-                    resp = client.get(url)
+                resp = _client().get(url, headers=self._headers)
                 if resp.status_code in (403, 401, 429):
                     raise ProviderUnavailable(f"{self.provider} blocked automated access ({resp.status_code})")
                 if resp.status_code == 404:  # genuinely missing asset: no retries

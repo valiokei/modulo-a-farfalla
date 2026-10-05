@@ -1,0 +1,111 @@
+:root {
+  --workspace-bg: #f4f6f5;
+  --workspace-ink: #182833;
+  --workspace-subtle: #586b75;
+  --workspace-border: #d8e1e2;
+  --workspace-accent: #176e5b;
+  --workspace-warm: #be693a;
+}
+
+body {background: var(--workspace-bg); color: var(--workspace-ink)}
+button, a, input, select, textarea {transition: border-color .14s ease, background-color .14s ease, box-shadow .14s ease}
+:is(button,a,input,select,textarea,summary):focus-visible {outline: 3px solid #50a6b6; outline-offset: 2px}
+
+#root > header {background:#fff;border-color:var(--workspace-border)}
+.mainNav {gap:5px;align-self:center;padding:4px;background:#edf2f2;border-radius:7px;min-height:44px}
+.mainNav button {min-height:36px;padding:7px 15px;border:0;border-radius:5px;color:var(--workspace-subtle);white-space:nowrap}
+.mainNav button.active {background:#fff;color:var(--workspace-accent);box-shadow:0 1px 4px #19394118}
+.mainNav button:hover:not(.active) {background:#e2eaeb;color:var(--workspace-ink)}
+.brand {white-space:nowrap;color:var(--workspace-ink)}
+.brand>span {border-radius:6px;background:var(--workspace-accent);color:#fff}
+
+.library {max-width:1400px;padding:36px 28px 80px}
+.libraryTop {align-items:center;gap:20px;flex-wrap:wrap;padding:0 0 21px;border-bottom:1px solid var(--workspace-border)}
+.libraryTop h1 {font-size:clamp(27px,3vw,36px);line-height:1.2;color:var(--workspace-ink)}
+.libraryTop p {margin:4px 0;color:var(--workspace-subtle)}
+.libraryTop .eyebrow {color:var(--workspace-accent)!important;margin-bottom:8px}
+.libraryTop>.primary,.libraryTop>.ghost {margin-left:auto}
+.primary {border-radius:6px;background:var(--workspace-accent);min-height:42px}
+.primary:hover {background:#115545}
+.ghost {border-radius:6px}
+
+.workspaceMetrics {display:flex;flex-wrap:wrap;gap:18px;padding:15px 0 0;color:var(--workspace-subtle)}
+.workspaceMetrics span {display:flex;gap:6px;align-items:baseline;padding-right:18px;border-right:1px solid var(--workspace-border)}
+.workspaceMetrics span:last-child {border-right:0}
+.workspaceMetrics strong {font:700 20px Manrope;color:var(--workspace-ink)}
+.search {max-width:580px;margin:22px 0 20px;border-color:var(--workspace-border);border-radius:6px}
+.teamStrip {margin-top:22px;padding-bottom:3px}
+.teamStrip button {min-width:190px;min-height:92px;border-color:var(--workspace-border);border-radius:6px;gap:3px}
+.teamStrip button:hover {border-color:#83ada7;background:#f9fdfb}
+.teamStrip b {color:var(--workspace-ink)}
+.matchGrid {grid-template-columns:repeat(auto-fill,minmax(min(285px,100%),1fr));gap:14px}
+.matchCard {border-color:var(--workspace-border);border-radius:6px;box-shadow:none;cursor:pointer}
+.matchCard:hover {transform:none;border-color:#6ba295;box-shadow:0 6px 18px #18374014}
+.matchThumb {height:130px;background:linear-gradient(125deg,#123d42,#215d4e);color:#fff}
+.matchCard>div:last-child {padding:16px}
+.matchCard h3 {font-size:17px;line-height:1.35;color:var(--workspace-ink)}
+.matchCard p {font-size:12px}
+
+.teamWorkspace {grid-template-columns:minmax(220px,290px) minmax(0,1fr);gap:0;margin-top:24px;border:1px solid var(--workspace-border);border-radius:6px;background:#fff;overflow:hidden}
+.teamList {border:0;border-right:1px solid var(--workspace-border);border-radius:0;background:#f8fafa;overflow:auto;max-height:min(72vh,760px)}
+.teamList>button {background:transparent;border-bottom:1px solid var(--workspace-border);min-height:66px}
+.teamList>button.active {background:#e4f2ee;box-shadow:inset 3px 0 var(--workspace-accent)}
+.teamDetail {border:0;border-radius:0;min-width:0}
+.teamDetailHead,.rosterHead {border-color:var(--workspace-border);padding:18px 22px;gap:12px}
+.rosterHead {border-top:0;background:#f8fafa}
+.playerTable {padding:0 22px 22px}
+.playerRow {border-color:var(--workspace-border)}
+.teamPage .libraryTop>.leagueImport {margin-left:auto}
+
+.leaguePage .libraryTop {align-items:flex-start}
+.leaguePage .leagueSelect {margin-top:20px}
+.leaguePage .statCard,.leagueTopBar .statCard {border-radius:6px;background:#fff;border-color:var(--workspace-border)}
+.leaguePage .statCard b {color:var(--workspace-accent)}
+.leaguePage .fixtureRow,.leagueStandings,.leagueResults {border-color:var(--workspace-border);border-radius:6px}
+.leaguePage h3 {margin-top:30px;color:var(--workspace-ink)}
+
+.modal {background:#0c1b22a8;backdrop-filter:blur(2px);padding:14px}
+body:has(.modal) {overflow:hidden}
+.modal>.draftCard {width:min(850px,100%);max-height:calc(100dvh - 28px);overflow:auto;margin:0;padding:24px;border-radius:6px;background:#fff;box-shadow:0 24px 70px #0b1b2140}
+.modal>.draftCard>.editorTitle {position:sticky;top:-24px;z-index:2;background:#fff;padding:0 0 12px;border-bottom:1px solid var(--workspace-border)}
+.modal>.draftCard>.editorTitle h3 {font-size:22px;color:var(--workspace-ink)}
+.modal>.draftCard .actions {flex-wrap:wrap;justify-content:flex-start}
+.modal>.draftCard .actions button {min-height:40px}
+.leagueMappings {max-height:35vh;overflow:auto;padding:10px 14px;border:1px solid var(--workspace-border);background:#fafcfc}
+.leagueMappings h4 {margin:4px 0 7px}
+.leagueMappingRow {display:grid;grid-template-columns:minmax(160px,1fr) minmax(200px,1fr);gap:12px;align-items:center;padding:8px 0;margin:0;border-top:1px solid #e7eeee}
+.leagueMappingRow span {font-size:13px;color:var(--workspace-ink);font-weight:600}
+.leagueMappingRow select {width:100%;min-width:0;margin:0}
+.leagueMappings .error {margin:8px 0}
+.leaguePreview {display:flex;align-items:end;gap:10px;margin-top:12px;border-top:1px solid var(--workspace-border);padding-top:12px}
+.leaguePreview label {flex:1;min-width:0;margin:0}
+.leaguePreview select {width:100%;min-width:0}
+.leaguePreview button {min-height:42px;white-space:nowrap}
+.leaguePreviewResult {margin-top:12px;padding:12px;border:1px solid #c4d9d3;background:#f3faf7;overflow-wrap:anywhere}
+.leaguePreviewResult p {margin:8px 0;font-size:13px}
+.leaguePreviewResult small {color:var(--workspace-subtle)}
+
+@media(max-width:900px) {
+  #root > header {height:auto;min-height:68px;flex-wrap:wrap;padding:10px 16px;gap:7px}
+  #root > header .mainNav {order:3;flex:1 1 100%;overflow-x:auto}
+  #root > header .mainNav button {font-size:13px}
+  .library {padding:26px 16px 60px}
+  .teamWorkspace {grid-template-columns:1fr}
+  .teamList {max-height:none;border-right:0;border-bottom:1px solid var(--workspace-border)}
+}
+@media(max-width:600px) {
+  .libraryTop {display:flex;align-items:flex-start}
+  .libraryTop h1 {font-size:28px}
+  .libraryTop>.primary,.libraryTop>.ghost {margin:0;width:100%}
+  .teamPage .libraryTop>.leagueImport {margin:0}
+  .workspaceMetrics {gap:10px}
+  .workspaceMetrics span {padding-right:10px;font-size:12px}
+  .workspaceMetrics strong {font-size:17px}
+  #root > header .mainNav button {padding:7px;font-size:12px;gap:4px}
+  .teamDetailHead,.rosterHead {padding:14px}
+  .playerTable {padding:0 12px 16px}
+  .leagueMappingRow {grid-template-columns:1fr;gap:4px}
+  .leaguePreview {align-items:stretch;flex-direction:column}
+  .modal>.draftCard {padding:16px}
+  .modal>.draftCard>.editorTitle {top:-16px}
+}

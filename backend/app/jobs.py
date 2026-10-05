@@ -5,9 +5,10 @@ import threading
 import uuid
 from pathlib import Path
 from sqlalchemy import select
+from sqlalchemy.orm.exc import ObjectDeletedError, StaleDataError
 from .db import SessionLocal
 from .models import AIJob, AISuggestion, Annotation, Event, Job, JobStatus, Video
-from .media import encode_h264, make_proxy, run_ffmpeg, safe_path
+from .media import VideoDeleted, encode_h264, make_proxy, run_ffmpeg, safe_path
 from .config import settings
 from .telestration import annotation_freeze, annotation_layers
 
@@ -93,22 +94,43 @@ def transcode(video_id: str) -> None:
         video = db.get(Video, video_id)
         if not video: return
         automatic_ai_job_id = None
-        video.status = "processing";video.processing_progress=1;video.error=None;db.commit();last_saved=1
+        proxy = safe_path("proxies", f"{video.id}.mp4")
+        thumb = safe_path("thumbnails", f"{video.id}.jpg")
+        last_saved = 1
         def save_progress(value:int) -> None:
             nonlocal last_saved
             value=max(1,min(100,int(value)))
             if value<100 and value-last_saved<2:return
-            video.processing_progress=value;db.commit();last_saved=value
+            try:
+                video.processing_progress=value;db.commit();last_saved=value
+            except (StaleDataError, ObjectDeletedError):
+                # The match (and its videos) was deleted while FFmpeg was
+                # running: abort the encode instead of committing onto a
+                # vanished row (which used to leave orphan FFmpeg processes).
+                db.rollback();raise VideoDeleted("Video was deleted while processing") from None
         try:
-            proxy = safe_path("proxies", f"{video.id}.mp4")
-            thumb = safe_path("thumbnails", f"{video.id}.jpg")
-            video.duration = make_proxy(Path(video.original_path),proxy,thumb,save_progress)
+            video.status = "processing";video.processing_progress=1;video.error=None;db.commit()
+            video.duration = make_proxy(Path(video.original_path),proxy,thumb,save_progress,encode_key=video.id)
             video.proxy_path=str(proxy);video.thumbnail_path=str(thumb);video.processing_progress=100;video.status="ready"
+            if video.analyze_after_processing:
+                ai_job=AIJob(video_id=video.id,config={"source":"automatic-import"});db.add(ai_job);db.flush();automatic_ai_job_id=ai_job.id
+            db.commit()
+        except VideoDeleted:
+            db.rollback();proxy.unlink(missing_ok=True);thumb.unlink(missing_ok=True)
+            logger.info("Processing cancelled; video %s was deleted", video_id)
+            return
+        except (StaleDataError, ObjectDeletedError):
+            db.rollback();proxy.unlink(missing_ok=True);thumb.unlink(missing_ok=True)
+            logger.info("Processing stopped; video %s was deleted", video_id)
+            return
         except Exception as exc:
-            video.status = "failed"; video.error = str(exc)
-        if video.status=="ready" and video.analyze_after_processing:
-            ai_job=AIJob(video_id=video.id,config={"source":"automatic-import"});db.add(ai_job);db.flush();automatic_ai_job_id=ai_job.id
-        db.commit()
+            try:
+                db.rollback();video.status = "failed"; video.error = str(exc);db.commit()
+            except (StaleDataError, ObjectDeletedError):
+                db.rollback();proxy.unlink(missing_ok=True);thumb.unlink(missing_ok=True)
+                logger.info("Processing failed after deletion for video %s", video_id)
+                return
+            logger.warning("Video processing failed for %s: %s", video_id, exc)
         if automatic_ai_job_id:launch(analyze,automatic_ai_job_id)
 
 
@@ -128,7 +150,9 @@ def export_clip(job_id: str) -> None:
             if end <= start: raise ValueError("Invalid clip range")
             video_filter = _overlay_filter(p.get("overlay", "") or None)
             annotation = latest_annotation(db, event.id) if event and p.get("include_annotations", True) else None
-            freeze = annotation_freeze(annotation, source, start, end, p.get("freeze_seconds", 0), offset)
+            freeze = annotation_freeze(annotation, source, start, end, p.get("freeze_seconds", 0), offset, event=event)
+            if freeze: logger.info("Clip job %s freezes at %.3fs for %.3fs (event %s)", job.id, freeze[0], freeze[1], event.id if event else None)
+            elif p.get("freeze_seconds"): logger.warning("Clip job %s: pause requested but no event/annotation anchor; exporting without pause", job.id)
             with annotation_layers(annotation, event, source, start, end, output, time_offset=offset, freeze=freeze) as layers:
                 encode_h264(source,output,start=start,end=end,filters=video_filter,overlays=layers,freeze=freeze,hardware_decode=not video_filter or os.name == "nt")
             job.result = {"path": str(output), "download": f"/api/jobs/{job.id}/download"}; job.progress = 100; job.status = JobStatus.completed
@@ -168,7 +192,7 @@ def export_highlight(job_id: str) -> None:
                     overlay_d={"header":cat,"minute":f"{int(event.timestamp//60)}'", "team":team,"player":actor,"note":event.note,"pitch_x":event.pitch_x,"pitch_y":event.pitch_y}
                 source = video.proxy_path or video.original_path
                 annotation = latest_annotation(db, event.id) if job.payload.get("include_annotations", True) else None
-                freeze=annotation_freeze(annotation,source,start,end,job.payload.get("freeze_seconds",0),offset)
+                freeze=annotation_freeze(annotation,source,start,end,job.payload.get("freeze_seconds",0),offset,event=event)
                 with annotation_layers(annotation, event, source, start, end, output, time_offset=offset, freeze=freeze) as layers:
                     encode_h264(source,output,start=start,end=end,filters=_overlay_filter(overlay_d),overlays=layers,freeze=freeze)
                 job.progress=int(80*(i+1)/len(events));db.commit()

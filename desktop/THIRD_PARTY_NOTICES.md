@@ -48,3 +48,15 @@ source where required. CPython uses the PSF licence; PyInstaller uses GPL with
 its bundling exception; Inno Setup has its own licence. Verify upstream notices
 for the exact build versions. Do not infer that all dependencies use the project
 licence or that this file alone establishes binary redistribution compliance.
+
+## Linux AppImage
+
+The self-contained Linux AppImage packages CPython (PSF licence), the pinned
+backend wheels, the built frontend, static FFmpeg/FFprobe from BtbN builds
+(GPL), DejaVu fonts (Bitstream Vera licence with public-domain additions) and
+libva 2.24 from Ubuntu (`libva2`, Expat licence) next to FFmpeg, because the
+bundled FFmpeg resolves VA-API symbols from libva.so.2 at runtime and aborts
+against older system libva versions. Archive checksums are pinned in
+`scripts/build-appimage.sh`; licence texts ship beside each component
+(`ffmpeg/LICENSE.txt`, `ffmpeg/libva-copyright.txt`,
+`fontconfig/DejaVu-LICENSE.txt`).

@@ -3,6 +3,7 @@ import {AlertTriangle, Cpu, MonitorPlay} from 'lucide-react';
 import {t, useI18n} from './i18n';
 import './desktop.css';
 import {DesktopUpdate} from './DesktopUpdate';
+import {DesktopDiagnostics} from './DesktopDiagnostics';
 
 export const isDesktop = import.meta.env.VITE_DESKTOP === 'true';
 
@@ -66,5 +67,6 @@ export function DesktopStatus() {
     <span title={t('desktop_playback_hint')}><MonitorPlay size={18}/>{t(playback)}</span>
     <DesktopAIWarning/>
     <DesktopUpdate/>
+    <DesktopDiagnostics/>
   </aside>;
 }

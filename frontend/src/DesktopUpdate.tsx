@@ -18,7 +18,8 @@ export function DesktopUpdate() {
     try {
       const result = await fetch('/desktop/update/check', {cache: 'no-store'}).then(async response => {
         const body = await response.json();
-        if (!response.ok) throw new Error(body.detail || t('desktop_update_error'));
+        if (!response.ok) throw new Error(body.code && ['dns','tls','proxy','timeout','http','network','metadata','asset'].includes(body.code)
+          ? t(`desktop_update_${body.code}`) : body.detail || t('desktop_update_error'));
         return body;
       });
       setState(result);
@@ -54,8 +55,8 @@ export function DesktopUpdate() {
       {state?.update_available && <strong>{t('desktop_update_available')}: {state.latest_version}</strong>}</div>
     <div className="desktopUpdateActions"><span>{message || (state?.update_available ? state.name : state?.latest_version ? t('desktop_update_current_ok') : t('desktop_update_not_checked'))}</span>
       {state?.update_available ? <button type="button" disabled={busy} onClick={() => void install()}><Download size={16}/>{t('desktop_update_install')}</button>
-        : <button type="button" disabled={busy} onClick={() => void check()}><RefreshCw size={16}/>{busy ? t('desktop_update_checking') : t('desktop_update_check')}</button>}
-      {state?.release_url && <a href={state.release_url} target="_blank" rel="noreferrer"><ExternalLink size={15}/>{t('desktop_update_release')}</a>}
+        : <button type="button" disabled={busy} onClick={() => void check()}><RefreshCw size={16}/>{busy ? t('desktop_update_checking') : message ? t('desktop_update_retry') : t('desktop_update_check')}</button>}
+      <a href={state?.release_url || 'https://github.com/valiokei/modulo-a-farfalla/releases'} target="_blank" rel="noreferrer"><ExternalLink size={15}/>{t('desktop_update_release')}</a>
     </div>
     {message && <p className="desktopUpdateMessage" role="alert">{message}</p>}
   </section>;

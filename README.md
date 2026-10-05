@@ -44,6 +44,9 @@ GPU-less runner; test import/export and playback on the intended hardware.
 
 ## Windows desktop
 
+For updater errors and league roster checks, see
+[Diagnostics and league imports](docs/TROUBLESHOOTING.md).
+
 Download the [Windows installer](https://github.com/valiokei/modulo-a-farfalla/releases/latest).
 It runs locally, needs no login, and preserves your data when updated.
 
