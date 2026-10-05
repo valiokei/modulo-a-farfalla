@@ -5,6 +5,7 @@ root = Path(SPECPATH).parent
 data = [(str(root / "frontend" / "dist"), "frontend"),
         (str(root / "backend" / "alembic"), "alembic"),
         (str(root / "desktop" / "build-version.txt"), "."),
+        (str(root / "VERSION"), "."),
         (str(root / "desktop" / "vendor" / "ffmpeg"), "ffmpeg"),
         (str(root / "desktop" / "THIRD_PARTY_NOTICES.md"), ".")]
 for package in ("alembic", "pydantic", "pydantic-settings", "pwdlib", "argon2-cffi", "sqlalchemy"):

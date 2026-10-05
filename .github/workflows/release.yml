@@ -1,4 +1,4 @@
-name: Windows installer
+name: Public release
 on:
   push:
     branches: [main, develop]
@@ -6,10 +6,10 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: windows-installer-${{ github.ref }}
+  group: public-release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  build:
+  windows:
     runs-on: windows-2022
     timeout-minutes: 35
     steps:
@@ -25,12 +25,15 @@ jobs:
       - name: Build and test Windows bundle
         shell: pwsh
         run: |
-          $version = "${{ github.sha }}".Substring(0, 7)
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($version -notmatch '^[0-9A-Za-z._-]+$') { throw "Unsupported version: $version" }
           ./desktop/build-windows.ps1 -Version $version
       - name: Test installer and uninstall data preservation
         shell: pwsh
         run: |
+          $version = (Get-Content VERSION -Raw).Trim()
           $setup = (Get-ChildItem dist/installer/*.exe | Select-Object -First 1).FullName
+          if ([IO.Path]::GetFileName($setup) -ne "Modulo-a-Farfalla-Setup-$version-x64.exe") { throw "Installer name does not match VERSION" }
           $target = Join-Path $env:RUNNER_TEMP "installed-app"
           $process = Start-Process $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$target" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Installer failed" }
@@ -54,9 +57,38 @@ jobs:
           name: Modulo-a-Farfalla-Windows-x64
           path: dist/installer/*
           retention-days: 30
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install FFmpeg used for the smoke media checks
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Build the self-contained Linux AppImage
+        run: scripts/build-appimage.sh
+      - name: Smoke-test the actual AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          appimage="dist/appimage/Modulo-a-Farfalla-$version-x86_64.AppImage"
+          test -f "$appimage"
+          pip install -r backend/requirements.txt
+          python desktop/smoke_test.py --executable "$appimage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Modulo-a-Farfalla-Linux-x86_64
+          path: dist/appimage/*
+          retention-days: 30
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
+    needs: [windows, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -64,27 +96,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: Modulo-a-Farfalla-Windows-x64
+          pattern: Modulo-a-Farfalla-*
           path: release-assets
-      - name: Publish verified Windows release
+          merge-multiple: true
+      - name: Publish verified Windows and Linux release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          short_sha="${GITHUB_SHA:0:7}"
-          commit_date="$(date -u -d "$(git show -s --format=%cI "$GITHUB_SHA")" +%Y%m%d)"
-          tag="windows-$commit_date-$short_sha"
-          installer="release-assets/Modulo-a-Farfalla-Setup-$short_sha-x64.exe"
-          test -f "$installer"
-          test -f "$installer.sha256"
-          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 2
-          (cd release-assets && sha256sum -c "$(basename "$installer").sha256")
+          version="$(tr -d '[:space:]' < VERSION)"
+          [[ "$version" =~ ^[0-9A-Za-z._-]+$ ]]
+          tag="v$version"
+          installer="release-assets/Modulo-a-Farfalla-Setup-$version-x64.exe"
+          appimage="release-assets/Modulo-a-Farfalla-$version-x86_64.AppImage"
+          for asset in "$installer" "$installer.sha256" "$appimage" "$appimage.sha256"; do
+            test -f "$asset"
+          done
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 4
+          (cd release-assets && sha256sum -c "$(basename "$installer").sha256" && sha256sum -c "$(basename "$appimage").sha256")
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $tag already exists; refusing to replace its assets"
             exit 1
           fi
-          gh release create "$tag" "$installer" "$installer.sha256" \
+          gh release create "$tag" "$installer" "$installer.sha256" "$appimage" "$appimage.sha256" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Modulo a Farfalla $tag" \
+            --title "Modulo a Farfalla $version" \
             --generate-notes

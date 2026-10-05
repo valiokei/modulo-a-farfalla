@@ -22,14 +22,17 @@ class Response(io.BytesIO):
         self.close()
 
 
-def release_payload(tag="windows-20260930-def5678", url=None):
+def release_payload(tag="windows-20260930-def5678", url=None, installer=None):
     release_url = url or f"{update.RELEASES}/tag/{tag}"
+    if installer is None:
+        version = tag[1:] if tag.startswith("v") else tag.rsplit("-", 1)[-1]
+        installer = f"Modulo-a-Farfalla-Setup-{version}-x64.exe"
     return ("{\"tag_name\":\"" + tag + "\",\"html_url\":\"" + release_url + "\","
             "\"assets\":["
             "{\"id\":1,\"url\":\"" + update.API + "/releases/assets/1\","
-            "\"state\":\"uploaded\",\"name\":\"Modulo-a-Farfalla-Setup-def5678-x64.exe\",\"size\":10},"
+            "\"state\":\"uploaded\",\"name\":\"" + installer + "\",\"size\":10},"
             "{\"id\":2,\"url\":\"" + update.API + "/releases/assets/2\","
-            "\"state\":\"uploaded\",\"name\":\"Modulo-a-Farfalla-Setup-def5678-x64.exe.sha256\",\"size\":80}]}"
+            "\"state\":\"uploaded\",\"name\":\"" + installer + ".sha256\",\"size\":80}]}"
             ).encode()
 
 
@@ -50,6 +53,36 @@ def test_public_release_uses_no_token_and_requires_expected_assets(monkeypatch):
     public = update.public_release(release)
     assert "installer" not in public and "checksum" not in public
     assert public["release_url"] == f"{update.RELEASES}/tag/windows-20260930-def5678"
+
+
+def test_semver_release_offers_update_to_an_older_build(monkeypatch):
+    monkeypatch.setattr(update, "build_version", lambda: "1.0.0")
+    monkeypatch.setattr(update, "_api_request", lambda *_a, **_k: Response(release_payload(tag="v1.1.0")))
+    release = update.latest_release()
+    assert release["latest_version"] == "v1.1.0"
+    assert release["update_available"] is True
+    assert release["installer"]["name"] == "Modulo-a-Farfalla-Setup-1.1.0-x64.exe"
+
+
+def test_current_semver_build_is_not_offered_its_own_release(monkeypatch):
+    monkeypatch.setattr(update, "build_version", lambda: "1.1.0")
+    monkeypatch.setattr(update, "_api_request", lambda *_a, **_k: Response(release_payload(tag="v1.1.0")))
+    assert update.latest_release()["update_available"] is False
+
+
+def test_semver_tag_must_match_its_installer_name(monkeypatch):
+    monkeypatch.setattr(update, "build_version", lambda: "1.0.0")
+    monkeypatch.setattr(update, "_api_request", lambda *_a, **_k:
+                        Response(release_payload(tag="v2.0.0", installer="Modulo-a-Farfalla-Setup-1.9.9-x64.exe")))
+    with pytest.raises(update.UpdateError, match="does not match"):
+        update.latest_release()
+
+
+def test_legacy_release_is_not_offered_to_versioned_builds(monkeypatch):
+    monkeypatch.setattr(update, "build_version", lambda: "1.0.0")
+    monkeypatch.setattr(update, "_api_request", lambda *_a, **_k: Response(release_payload()))
+    release = update.latest_release()
+    assert release["update_available"] is False
 
 
 def test_unexpected_repository_release_is_rejected(monkeypatch):

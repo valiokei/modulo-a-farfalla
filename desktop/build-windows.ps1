@@ -1,6 +1,10 @@
-param([string]$Version = "development")
+param([string]$Version)
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
+if (-not $Version) {
+    $Version = if (Test-Path "VERSION") { (Get-Content "VERSION" -Raw).Trim() } else { "development" }
+}
+if ($Version -notmatch '^[0-9A-Za-z._-]+$') { throw "Unsupported version string: $Version" }
 
 function Invoke-Checked {
     param([string]$Program, [string[]]$Arguments)

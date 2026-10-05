@@ -309,6 +309,7 @@ def create_application(frontend: Path, application_id: str, origin: str, languag
     def update_check():
         try:
             release = update.public_release(update.latest_release())
+            release["install_supported"] = os.environ.get("MODULO_PACKAGER") not in {"electron", "appimage"}
             if diagnostics:
                 diagnostics.event("update_check", operation="update")
             return release
@@ -320,7 +321,7 @@ def create_application(frontend: Path, application_id: str, origin: str, languag
     @app.post("/desktop/update/install", include_in_schema=False)
     def install_update():
         if os.environ.get("MODULO_PACKAGER") in {"electron", "appimage"}:
-            return JSONResponse({"detail": "Use the release link for this preview build", "code": "unsupported"},
+            return JSONResponse({"detail": "This build updates from the release page", "code": "unsupported"},
                                 status_code=503)
         try:
             installer = update.download_verified_update()

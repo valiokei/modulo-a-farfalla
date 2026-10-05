@@ -3,9 +3,10 @@
 This guide gets a new installation to its first match review with the fewest
 required settings.
 
-## Windows desktop
+## Desktops (Windows / Linux)
 
-1. Install the x64 installer from the official project release.
+1. Install the x64 installer (Windows) or download the `.AppImage` (Linux)
+   from the official project release.
 2. Start **Modulo a Farfalla**. The desktop edition runs its API on loopback
    (`127.0.0.1`) and opens the local interface; it does not connect to a server
    or require an account.
@@ -14,7 +15,8 @@ required settings.
 4. Create a match, select home and away teams, and add the match video.
 5. Open the match and follow [Match analysis tutorial](MATCH_ANALYSIS_TUTORIAL.md).
 
-Your Windows database and media stay under `%LOCALAPPDATA%\ModuloAFarfalla`.
+Your Windows database and media stay under `%LOCALAPPDATA%\ModuloAFarfalla`
+(the Linux AppImage keeps them under `~/.local/share/modulo-a-farfalla`).
 Back up that folder before moving the installation to another PC.
 
 ## Linux / Docker server

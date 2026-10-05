@@ -32,6 +32,9 @@
 .desktopUpdate.available button {border-color:#9b6816; color:#573800;}
 .desktopUpdate button:disabled {opacity:.6; cursor:wait;}
 .desktopUpdate a {display:inline-flex; align-items:center; gap:4px; color:#2457a7;}
+.desktopUpdate a.desktopUpdateInstall {display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:36px;
+  padding:6px 11px; border:1px solid #819889; border-radius:5px; background:#fff; color:#193b2a; text-decoration:none;}
+.desktopUpdate.available a.desktopUpdateInstall {border-color:#9b6816; color:#573800;}
 .desktopUpdate .desktopUpdateDismiss {border-color:transparent; background:transparent;}
 .desktopUpdateMessage {margin:8px 0 0; color:#9a2c25;}
 .desktopStatus + .login {min-height: calc(100dvh - 74px);}

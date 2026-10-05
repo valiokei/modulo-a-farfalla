@@ -35,8 +35,19 @@ def wait_for(client, path, key, expected, timeout=90):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--executable", type=Path)
+    parser.add_argument("--ffmpeg-dir", type=Path,
+                        help="directory holding the ffmpeg/ffprobe used for test media and checks")
     args = parser.parse_args()
     executable = args.executable.resolve() if args.executable else None
+    if args.ffmpeg_dir:
+        ffmpeg = str(args.ffmpeg_dir / "ffmpeg")
+        ffprobe = str(args.ffmpeg_dir / "ffprobe")
+        assert Path(ffmpeg).is_file() and Path(ffprobe).is_file(), "ffmpeg directory is incomplete"
+    elif executable and os.name == "nt":
+        ffmpeg = str(executable.parent / "_internal" / "ffmpeg" / "ffmpeg.exe")
+        ffprobe = str(executable.parent / "_internal" / "ffmpeg" / "ffprobe.exe")
+    else:
+        ffmpeg, ffprobe = "ffmpeg", "ffprobe"
     from desktop.launcher import load_config, configure_environment, migrate_database, initialize_local_user, atomic_json
     root = Path(tempfile.mkdtemp(prefix="modulo smoke "))
     config = load_config(root)
@@ -78,10 +89,6 @@ def main():
             assert client.post("/api/auth/login", json=login).status_code == 404
             assert client.post("/api/ai/jobs", json={"video_id": "absent"}).status_code == 503
             match = client.post("/api/matches", json={"date": "2026-01-01", "home_team": "Local Home", "away_team": "Local Away"}).json()
-            if executable and os.name == "nt":
-                ffmpeg = executable.parent / "_internal" / "ffmpeg" / "ffmpeg.exe"
-            else:
-                ffmpeg = "ffmpeg"
             video = root / "sample.mp4"
             subprocess.run([str(ffmpeg), "-y", "-f", "lavfi", "-i", "color=c=green:s=320x180:r=25,drawbox=x=190:y=10:w=80:h=25:c=red:t=fill:enable='lt(t,0.8)'",
                             "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video)],
@@ -146,7 +153,6 @@ def main():
             # This source box disappears at .8s; with a 2s hold it disappears at 2.8s.
             assert read_frame(exported,2)[15:25,200:260,0].mean()>150
             assert read_frame(exported,3)[15:25,200:260,0].mean()<100
-            ffprobe = executable.parent/'_internal'/'ffmpeg'/'ffprobe.exe' if executable and os.name == 'nt' else 'ffprobe'
             duration=subprocess.run([str(ffprobe),'-v','error','-show_entries','format=duration',
                 '-of','default=nw=1:nk=1',str(exported)],capture_output=True,text=True,check=True,timeout=30).stdout
             assert abs(float(duration)-4)<.15

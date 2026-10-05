@@ -1,4 +1,4 @@
-"""Unauthenticated, checksum-verified updater for public Windows releases."""
+"""Unauthenticated, checksum-verified updater for the public desktop releases."""
 from __future__ import annotations
 
 import hashlib
@@ -21,6 +21,9 @@ REPOSITORY = "modulo-a-farfalla"
 API = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}"
 RELEASES = f"https://github.com/{OWNER}/{REPOSITORY}/releases"
 MAX_INSTALLER_BYTES = 500 * 1024 * 1024
+VERSION_TAG = re.compile(r"v([0-9]+)\.([0-9]+)\.([0-9]+)")
+LEGACY_TAG = re.compile(r"windows-[0-9]{8}-([0-9a-fA-F]{7,40})")
+HASH_VERSION = re.compile(r"[0-9a-fA-F]{7,40}")
 INSTALLER_NAME = re.compile(r"^Modulo-a-Farfalla-Setup-[A-Za-z0-9._-]+-x64\.exe$")
 
 
@@ -46,11 +49,15 @@ def network_error(exc: BaseException) -> UpdateError:
 
 
 def build_version() -> str:
-    try:
-        return (Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) /
-                "build-version.txt").read_text(encoding="ascii").strip()
-    except OSError:
-        return "development"
+    for candidate in (Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "build-version.txt",
+                      Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])) / "VERSION"):
+        try:
+            value = candidate.read_text(encoding="ascii").strip()
+        except OSError:
+            continue
+        if value:
+            return value
+    return "development"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -95,9 +102,21 @@ def latest_release() -> dict:
     if not isinstance(release, dict):
         raise UpdateError("GitHub returned invalid release metadata", "metadata")
     tag = str(release.get("tag_name", ""))
-    tag_match = re.fullmatch(r"windows-[0-9]{8}-([0-9a-fA-F]{7,40})", tag)
     expected_release_url = f"{RELEASES}/tag/{tag}"
-    if not tag_match or release.get("html_url") != expected_release_url:
+    if not tag or release.get("html_url") != expected_release_url:
+        raise UpdateError("GitHub returned an unexpected release", "metadata")
+    version_tag = VERSION_TAG.fullmatch(tag)
+    legacy_tag = LEGACY_TAG.fullmatch(tag)
+    if version_tag:
+        wanted = ".".join(version_tag.groups())
+        expected_installer = f"Modulo-a-Farfalla-Setup-{wanted}-x64.exe"
+        wanted_version = tuple(map(int, version_tag.groups()))
+        legacy_commit = None
+    elif legacy_tag:
+        expected_installer = f"Modulo-a-Farfalla-Setup-{legacy_tag.group(1)}-x64.exe"
+        wanted_version = None
+        legacy_commit = legacy_tag.group(1)
+    else:
         raise UpdateError("GitHub returned an unexpected release", "metadata")
     assets = release.get("assets", [])
     if not isinstance(assets, list):
@@ -106,22 +125,30 @@ def latest_release() -> dict:
                       and INSTALLER_NAME.fullmatch(asset.get("name", ""))), None)
     if not installer:
         raise UpdateError("Latest public release has no supported Windows x64 installer", "asset")
+    if installer["name"] != expected_installer:
+        raise UpdateError("Latest release tag does not match its installer name", "metadata")
+    current = build_version()
+    if wanted_version is not None:
+        current_version = VERSION_TAG.fullmatch(f"v{current}")
+        update_available = (current_version is not None and
+                            tuple(map(int, current_version.groups())) < wanted_version)
+    else:
+        # Legacy hash releases are only offered to builds identified by their commit hash.
+        update_available = (legacy_commit is not None and current != "development"
+                            and HASH_VERSION.fullmatch(current) is not None
+                            and legacy_commit.lower() != current.lower())
     checksum = next((asset for asset in assets if isinstance(asset, dict)
                      and asset.get("name") == installer["name"] + ".sha256"), None)
     if not checksum:
         raise UpdateError("Latest release is missing its installer SHA-256 file", "asset")
-    if not tag_match or not installer["name"].endswith(f"-{tag_match.group(1)}-x64.exe"):
-        raise UpdateError("Latest release tag does not match the Windows release format", "metadata")
     for asset in (installer, checksum):
         expected_url = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}/releases/assets/{asset.get('id')}"
         if not re.fullmatch(r"[0-9]+", str(asset.get("id", ""))) or asset.get("url") != expected_url:
             raise UpdateError("GitHub returned an unexpected release asset", "asset")
         if asset.get("state") not in (None, "uploaded"):
             raise UpdateError("GitHub release asset is not available", "asset")
-    current = build_version()
-    latest_commit = tag_match.group(1)
     return {"current_version": current, "latest_version": tag,
-            "update_available": current != "development" and latest_commit.lower() != current.lower(),
+            "update_available": update_available,
             "release_url": expected_release_url, "name": release.get("name") or tag,
             "installer": installer, "checksum": checksum}
 

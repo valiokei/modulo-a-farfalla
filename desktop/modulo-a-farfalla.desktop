@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Modulo a Farfalla
+Comment=Match video analysis for a single club (local desktop edition)
+Comment[it]=Analisi video delle partite per una singola squadra (edizione desktop locale)
+Exec=modulo-a-farfalla
+Icon=modulo-a-farfalla
+Terminal=false
+Categories=AudioVideo;Video;

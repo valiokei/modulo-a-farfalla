@@ -42,13 +42,17 @@ GPU support describes implemented selection and fallback paths, not a promise
 that every device has been physically tested. The hosted Windows build uses a
 GPU-less runner; test import/export and playback on the intended hardware.
 
-## Windows desktop
+## Windows and Linux desktop
 
 For updater errors and league roster checks, see
 [Diagnostics and league imports](docs/TROUBLESHOOTING.md).
 
-Download the [Windows installer](https://github.com/valiokei/modulo-a-farfalla/releases/latest).
-It runs locally, needs no login, and preserves your data when updated.
+Download the [Windows installer](https://github.com/valiokei/modulo-a-farfalla/releases/latest)
+or the [Linux AppImage](https://github.com/valiokei/modulo-a-farfalla/releases/latest).
+They run locally, need no login, and preserve your data when updated.
+Releases are tagged with the app version (`v1.0.0`); Windows packages use the
+matching `Setup-<version>-x64.exe` name and Linux packages the
+`-<version>-x86_64.AppImage` name.
 
 New releases are published from tested commits on `main`. See the
 [Quick Start](docs/QUICKSTART.md), [match-analysis tutorial](docs/MATCH_ANALYSIS_TUTORIAL.md)
