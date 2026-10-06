@@ -17,9 +17,9 @@ written commercial licence. Third-party components remain under their own terms.
 
 ## What it can do
 
-| Capability | Windows desktop | Linux / Docker server | Notes |
+| Capability | Desktop app (Windows / Linux) | Self-hosted server (Docker) | Notes |
 | --- | --- | --- | --- |
-| Match and multi-camera video review | Available | Available | Local Windows data is separate from any server deployment. |
+| Match and multi-camera video review | Available | Available | Local desktop data is separate from any server deployment. |
 | Manual event tagging, qualifiers, participants and pitch coordinates | Available | Available | Configurable event taxonomy and templates. |
 | Notes, drawings, clips and highlights | Available | Available | Supported screen annotations can be burned into exported clips; unsupported tracking-anchored shapes fail explicitly. |
 | Team, player and match administration | Available | Available | Admin, coach and read-only player roles on the server. |
@@ -34,13 +34,67 @@ written commercial licence. Third-party components remain under their own terms.
 | Environment | Status | Requirements / limits |
 | --- | --- | --- |
 | Windows 10 x64 (build 19041+) and Windows 11 x64 | Supported desktop installer | Current vendor graphics drivers recommended; no Docker, Python or separate FFmpeg install required. ARM and 32-bit Windows are not packaged. |
+| Linux x86_64 (AppImage) | Supported desktop download | Self-contained; no Docker, Python or separate FFmpeg install required. Built and smoke-tested by CI on every release; verify playback and encoding on the intended hardware. |
 | Linux x86_64 with Docker Compose | Supported self-hosted deployment | Docker Engine/Compose and persistent storage; optional GPU overlay must match the host runtime. |
-| macOS, Linux desktop installer, Windows ARM | Not currently packaged or acceptance-tested | Use the documented development/server path only where dependencies are supported. |
-| AI on Windows desktop | Not available | Torch, OpenSportsLib and model weights are not bundled. |
+| macOS, Windows ARM | Not currently packaged or acceptance-tested | Use the documented development/server path only where dependencies are supported. |
+| AI on the desktop app | Not available | Torch, OpenSportsLib and model weights are not bundled. |
 
 GPU support describes implemented selection and fallback paths, not a promise
-that every device has been physically tested. The hosted Windows build uses a
-GPU-less runner; test import/export and playback on the intended hardware.
+that every device has been physically tested. The hosted Windows and Linux
+builds run on GPU-less runners; test import/export and playback on the
+intended hardware.
+
+## Server and client
+
+Modulo a Farfalla is a client–server application. The **server** (Python /
+FastAPI) owns the database, the media files and the background video jobs
+(proxy creation, clip and highlight exports). The **client** is a web
+interface (React SPA) opened in a browser. In the desktop app the server
+serves the interface directly; in the Docker deployment a small web container
+serves it and forwards API calls to the server. Either way there is no
+separate client program to install. It runs in two supported ways:
+
+| | Desktop app (Windows / Linux) | Self-hosted server (Docker) |
+| --- | --- | --- |
+| How it runs | The app starts a private server on `127.0.0.1` (a free local port) and opens the interface in your browser. | The server runs on a host you manage and serves browsers on your network. |
+| Access | Loopback only: not reachable from other devices. No login; a local coach profile. | Login with admin, coach or player accounts (a bootstrap admin is created on first start). |
+| Data | Your user folder: `%LOCALAPPDATA%\ModuloAFarfalla` (Windows) or `~/.local/share/modulo-a-farfalla` (Linux). | PostgreSQL plus persistent media volumes on the host. |
+| AI action spotting | Not included. | Optional runtime; suggestions only, reviewed by a coach. |
+
+Desktop data is separate from any server deployment: each keeps its own
+database and media.
+
+## The interface
+
+The web interface is a single workspace with three main areas:
+
+- **Library** — the starting screen. **Matches** lists your matches (create
+  one, then add one video per camera); **Teams** manages teams and rosters,
+  with a roster CSV import; **Leagues** browses official competitions,
+  fixtures and standings, imports league data and results (with explicit
+  team mapping), and opens a fixture directly for analysis.
+- **Match analysis** — the review and tagging view: camera switching,
+  playback controls (play/pause, ±10 s, frame stepping, speed, fullscreen,
+  loop) and a timeline with one marker per event plus category filters.
+  - Tag events as the video plays, using per-category keyboard shortcuts
+    (shown on each category button); each event keeps team, participants,
+    qualifiers, notes, tags and an optional pitch position.
+  - Every event has a **time window** (editable from/to): the loop flag
+    repeats exactly that window, and clip export uses it.
+  - **Notes and drawings**: pause on a frame and draw with pen, polygon or
+    arrow, in five colours, with undo/redo. Drawings are saved per event,
+    replay during playback and can be burned into exported clips.
+  - **Stats**: coach metrics in groups, each drillable back into the video,
+    and a pitch map of tagged positions.
+  - **Exports**: event clip with overlays and an optional freeze-frame
+    pause, compiled match highlight, and CSV/JSON of the tagged events.
+- **Role screens** — server deployments add an **admin console** for user
+  accounts and a read-only **player portal** with personal stats and matches.
+
+The interface is Italian by default; a flag button switches between
+Italian and English. The desktop app additionally shows a status bar with the
+detected video encoder, the browser's playback capability estimate, the update
+check and a diagnostics export.
 
 ## Windows and Linux desktop
 
@@ -50,9 +104,10 @@ For updater errors and league roster checks, see
 Download the [Windows installer](https://github.com/valiokei/modulo-a-farfalla/releases/latest)
 or the [Linux AppImage](https://github.com/valiokei/modulo-a-farfalla/releases/latest).
 They run locally, need no login, and preserve your data when updated.
-Releases are tagged with the app version (`v1.0.0`); Windows packages use the
-matching `Setup-<version>-x64.exe` name and Linux packages the
-`-<version>-x86_64.AppImage` name.
+Releases are tagged with the app version (`v1.0.0`) and carry both packages
+with their SHA-256 checksums: the Windows installer
+(`Modulo-a-Farfalla-Setup-<version>-x64.exe`) and the Linux AppImage
+(`Modulo-a-Farfalla-<version>-x86_64.AppImage`).
 
 New releases are published from tested commits on `main`. See the
 [Quick Start](docs/QUICKSTART.md), [match-analysis tutorial](docs/MATCH_ANALYSIS_TUTORIAL.md)
@@ -114,7 +169,7 @@ with reproducible steps. This development use is separate from the optional
 AI feature described below.
 
 AI action spotting is optional and currently available only in the Linux/server
-runtime, not in the Windows desktop installer. It uses OpenSportsLib's
+runtime, not in the desktop app (Windows or Linux). It uses OpenSportsLib's
 `LocalizationModel` with the `OpenSportsLab/OSL-loc-snbas-2025-e2e` model. The
 model card declares AGPL-3.0; OpenSportsLib and model terms must be reviewed
 separately before deployment or redistribution. The project does not relicense
@@ -138,8 +193,9 @@ have separate rights; see [CONTRIBUTING](CONTRIBUTING.md) and
 
 ## Current release status
 
-The Windows installer is unsigned; Windows SmartScreen may show a warning. Get
-installers only from the project's verified GitHub Releases and compare the
-published SHA-256. Do not disable SmartScreen or antivirus globally. Server
-deployments are self-hosted and require the operator to secure backups,
-authentication, TLS and network access.
+The Windows installer is unsigned; Windows SmartScreen may show a warning.
+Neither package is code-signed. Get the installer or the AppImage only from the
+project's verified GitHub Releases and compare the published SHA-256. Do not
+disable SmartScreen or antivirus globally. Server deployments are self-hosted
+and require the operator to secure backups, authentication, TLS and network
+access.
