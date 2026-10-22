@@ -6,12 +6,12 @@ from datetime import timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import (ExternalIdentity, LeagueCompetition, LeagueFixture, LeagueTeamMapping,
-                      LeagueStanding, OfficialPlayerStat, Player, Team, now)
+                      LeagueStanding, Match, OfficialPlayerStat, Player, Team, now)
 from ..db import SessionLocal
 from . import pfs
 
@@ -72,6 +72,22 @@ def _identity(db: Session, provider: str, entity_type: str, external_id: str,
     return ident
 
 
+def legacy_team_name(team: pfs.Team) -> str:
+    """Team name as stored by imports before the PFS parser split long/middle/short."""
+    return " ".join(part for part in (team.name, team.short_name, team.abbreviation) if part).strip()
+
+
+def _repair_legacy_name(db: Session, team: Team, legacy: str, name: str) -> None:
+    """Replace the concatenated name of older imports on the team and on its matches."""
+    if legacy == name:
+        return
+    if team.name == legacy:
+        team.name = name
+    for side in ("home", "away"):
+        db.execute(update(Match).where(getattr(Match, f"{side}_team_id") == team.id, getattr(Match, f"{side}_team") == legacy)
+                   .values({f"{side}_team": name}))
+
+
 def upsert_competition(db: Session, provider: str, comp: pfs.Competition) -> LeagueCompetition:
     row = db.scalar(select(LeagueCompetition).where(
         LeagueCompetition.provider == provider,
@@ -118,8 +134,10 @@ def import_competition(provider: str, season: str, external_id: str, *,
                 local_team = db.get(Team, local_team_id)
                 if not local_team:
                     raise ValueError(f"Mapped local team is missing for {team_dto.name}")
+                # Older imports stored the concatenated "long middle short" link text.
+                _repair_legacy_name(db, local_team, legacy_team_name(team_dto), team_dto.name.strip())
             else:
-                if db.scalar(select(Team).where(Team.name == team_dto.name.strip())):
+                if db.scalar(select(Team).where(Team.name.in_({team_dto.name.strip(), legacy_team_name(team_dto)}))):
                     raise ValueError(f"Select a local team for {team_dto.name} before importing this competition")
                 local_team = Team(name=team_dto.name.strip(), notes=f"Imported {provider} · {season}")
                 db.add(local_team)
@@ -271,6 +289,19 @@ def _canonical_slug(prov, cid: str | None, slug: str | None) -> str:
     return slug or (cid or "")
 
 
+def _ensure_competition(provider: str, season: str, cid: str | None) -> None:
+    """Fixtures can be requested for a group that was never imported: import
+    its table first (no team mapping) so the fixtures have a competition row."""
+    if not cid:
+        return
+    with SessionLocal() as db:
+        exists = db.scalar(select(LeagueCompetition.id).where(
+            LeagueCompetition.provider == provider, LeagueCompetition.external_id == cid,
+            LeagueCompetition.season == season))
+    if not exists:
+        import_competition(provider, season, cid)
+
+
 def sync_fixtures(provider: str, season: str, *, competition_slug: str,
                   competition_id: str | None = None, team_external_id: str | None = None) -> dict:
     """Import the full fixture season (played + upcoming) for a whole competition."""
@@ -285,6 +316,7 @@ def sync_fixtures(provider: str, season: str, *, competition_slug: str,
     if cid and not slug.startswith(f"{cid}-"):
         return {"imported": 0, "error": f"cannot resolve a verified slug for competition {cid}"}
     fixtures = prov.get_fixtures(slug, league_id=cid)
+    _ensure_competition(provider, season, cid)
     saved = 0
     with SessionLocal() as db:
         comp_row = None
@@ -332,6 +364,8 @@ def sync_fixtures(provider: str, season: str, *, competition_slug: str,
                     row.away_score = fx.away_score
                 if fx.date:
                     row.match_date = fx.date
+                if fx.round_label:
+                    row.round_label = fx.round_label
             db.flush()
             saved += 1
         db.commit()
@@ -348,6 +382,7 @@ def sync_competition_fixtures(provider: str, season: str, *, competition_externa
     if cid and not slug.startswith(f"{cid}-"):
         return {"imported": 0, "error": f"cannot resolve a verified slug for competition {cid}"}
     fixtures = prov.get_fixtures_rounds(slug, rounds=rounds, league_id=cid)
+    _ensure_competition(provider, season, cid)
     saved = 0
     with SessionLocal() as db:
         comp = db.scalar(select(LeagueCompetition).where(
@@ -389,10 +424,10 @@ def sync_competition_fixtures(provider: str, season: str, *, competition_externa
 
 def sync_pibfal(season_label: str = "2026/27 Championship", team_slug: str = "galaksia-praha-23",
                 local_team_id: str | None = None, season_tag: str = "2026/27") -> dict:
-    """Import PIBFAL fixtures/results for the given season label (never mixed)."""
+    """Import the whole PIBFAL season (table + every club's events), never mixing seasons."""
     from . import pibfal
     provider = pibfal.PibfalProvider(season=season_label)
-    events = provider.event_list(team_slug=team_slug)
+    table, events = provider.league_events(season_tag, fallback_team=team_slug)
     saved = 0
     with SessionLocal() as db:
         # Use a dedicated competition row for PIBFAL season
@@ -405,10 +440,26 @@ def sync_pibfal(season_label: str = "2026/27 Championship", team_slug: str = "ga
                                      name=f"PIBFAL {season_label}", season=season_tag)
             db.add(comp)
             db.flush()
+        for entry in table:
+            if not entry.team_id:
+                continue
+            standing = db.scalar(select(LeagueStanding).where(
+                LeagueStanding.competition_id == comp.id, LeagueStanding.external_team_id == entry.team_id))
+            if not standing:
+                standing = LeagueStanding(competition_id=comp.id, external_team_id=entry.team_id, team_name=entry.team_name)
+                db.add(standing)
+            for key in ("team_name", "position", "played", "wins", "draws", "losses", "goals_for", "goals_against", "points"):
+                setattr(standing, key, getattr(entry, key))
         for ev in events:
             row = db.scalar(select(LeagueFixture).where(
                 LeagueFixture.competition_id == comp.id,
                 LeagueFixture.external_id == ev.id))
+            if not row and ev.legacy_id:
+                # Rows imported before events were keyed by URL slug used the date digits.
+                row = db.scalar(select(LeagueFixture).where(
+                    LeagueFixture.competition_id == comp.id, LeagueFixture.external_id == ev.legacy_id))
+                if row:
+                    row.external_id = ev.id
             home_score = away_score = None
             status = "upcoming"
             if ev.played and ev.score:
@@ -433,7 +484,10 @@ def sync_pibfal(season_label: str = "2026/27 Championship", team_slug: str = "ga
                     row.match_date = ev.date
                 row.home_team = ev.home or row.home_team
                 row.away_team = ev.away or row.away_team
+                row.home_external_id = ev.home_external_id or row.home_external_id
+                row.away_external_id = ev.away_external_id or row.away_external_id
+                row.url = ev.url or row.url
             db.flush()
             saved += 1
         db.commit()
-    return {"imported": saved, "fixtures": [e.id for e in events]}
+    return {"imported": saved, "teams": len(table), "fixtures": [e.id for e in events]}

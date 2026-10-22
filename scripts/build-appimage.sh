@@ -107,7 +107,7 @@ rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' \
   "$ROOT/backend/app/" "$STAGE/backend/app/"
 rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' \
   "$ROOT/backend/alembic/" "$STAGE/backend/alembic/"
-for file in __init__.py launcher.py update.py diagnostics.py THIRD_PARTY_NOTICES.md; do
+for file in __init__.py launcher.py update.py diagnostics.py ai_runtime.py THIRD_PARTY_NOTICES.md; do
   cp "$ROOT/desktop/$file" "$STAGE/desktop/$file"
 done
 printf '%s' "$VERSION_VALUE" > "$STAGE/desktop/build-version.txt"

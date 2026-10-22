@@ -18,6 +18,8 @@ from sqlalchemy.orm import Session, joinedload
 from .config import settings
 from .db import Base, SessionLocal, engine, get_db
 from .jobs import analyze, export_clip, export_highlight, launch, transcode
+from .stats import calculate_stats
+from .dashboard import build_dashboard
 from .media import disk_has_space, initialize_storage, remove_video_files, request_encode_cancel, safe_path
 from .models import AIJob, AISuggestion, Annotation, Category, Event, EventPlayer, ExternalIdentity, Job, JobStatus, LeagueCompetition, LeagueFixture, LeagueStanding, LeagueTeamMapping, Match, MatchPlayer, OfficialPlayerStat, PitchCalibration, Player, PlayerTrack, Playlist, Presentation, PresentationItem, Role, SuggestionStatus, Team, Template, TrackingJob, User, Video
 from .security import admin_user, coach_user, current_user, hash_password, make_token, verify_password
@@ -30,10 +32,10 @@ DEFAULTS = [
 ]
 COACH_CATEGORIES = [
     "Possession","Attacking Phase","Defensive Phase","Build-up","Progression","Final Third","Sustained Attack","Defensive Block","High Press","Mid Block","Low Block","Counterattack","Attacking Transition","Defensive Transition","Counterpress","Restart","Stoppage",
-    "Forward Pass","Backward Pass","Lateral Pass","Progressive Pass","Through Ball","Line-breaking Pass","Key Pass","Long Pass","Switch of Play","Cutback","Assist","Carry","Progressive Carry","Dribble","Final Third Entry","Penalty Area Entry","Box Entry",
+    "Forward Pass","Backward Pass","Lateral Pass","Progressive Pass","Through Ball","Line-breaking Pass","Key Pass","Long Pass","Switch of Play","Cutback","Assist","Carry","Progressive Carry","Dribble","Final Third Entry","Penalty Area Entry",
     "Shot on Target","Big Chance","Chance Creation","Header","Post/Bar","Blocked Shot","Off Target",
-    "Pressure","Press","Tackle","Interception","Recovery","Turnover Forced","Clearance","Block","Defensive Duel","Aerial Duel","Ground Duel","Second Ball","Error",
-    "Ball Recovery","Ball Loss","Miscontrol","Dispossessed","Forced Turnover","Unforced Turnover",
+    "Pressure","Tackle","Interception","Recovery","Clearance","Block","Defensive Duel","Aerial Duel","Ground Duel","Second Ball","Error",
+    "Ball Loss","Miscontrol","Dispossessed","Forced Turnover","Unforced Turnover",
     "Throw-in","Kick-off","Foul","Yellow Card","Red Card","Offside","Substitution","Injury","VAR Decision",
     "Goal Conceded","Catch","Parry","Deflection","Reflex Save","Cross Claim","Punch","Sweeper Action","Short Distribution","Long Distribution","Throw","Goal Kick","Pass Received","Pass Under Pressure"
 ]
@@ -50,7 +52,7 @@ TEMPLATE_CATEGORIES={
     "Full Match":["Possession","Build-up","Progression","Final Third","Pass","Progressive Pass","Long Pass","Cross","Carry","Dribble","Shot","Shot on Target","Goal","Pressure","Tackle","Interception","Recovery","Ball Loss","Counterattack","Attacking Transition","Defensive Transition","Corner","Free Kick","Foul","Offside","Note"],
     "Tactical":["Possession","Attacking Phase","Defensive Phase","Build-up","Progression","Final Third","Defensive Block","High Press","Mid Block","Low Block","Counterattack","Attacking Transition","Defensive Transition","Counterpress","Final Third Entry","Penalty Area Entry","Note"],
     "Attacking":["Pass","Progressive Pass","Through Ball","Key Pass","Long Pass","Switch of Play","Cross","Cutback","Carry","Progressive Carry","Dribble","Final Third Entry","Penalty Area Entry","Shot","Shot on Target","Goal","Big Chance","Chance Creation","Note"],
-    "Defensive":["Pressure","Press","Counterpress","Tackle","Interception","Recovery","Clearance","Block","Defensive Duel","Aerial Duel","Second Ball","Ball Recovery","Forced Turnover","Defensive Error","Note"],
+    "Defensive":["Pressure","Counterpress","Tackle","Interception","Recovery","Clearance","Block","Defensive Duel","Aerial Duel","Second Ball","Forced Turnover","Defensive Error","Note"],
     "Set Pieces":["Corner","Free Kick","Penalty","Throw-in","Goal Kick","Kick-off","Cross","Shot","Goal","Note"],
     "Goalkeeper":["Save","Goal Conceded","GK Error","1v1","Catch","Parry","Deflection","Reflex Save","High Ball","Cross Claim","Punch","Sweeper Action","Short Distribution","Long Distribution","Throw","Goal Kick","Pass Received","Pass Under Pressure","Note"],
     "Custom":[],
@@ -457,13 +459,35 @@ async def league_legacy_mappings(_=Depends(coach_user),db:Session=Depends(get_db
         ExternalIdentity.provider=="pfs",ExternalIdentity.entity_type=="team")).all()
     return [row.external_id for row in rows]
 
+def _local_names(db:Session,comps)->dict:
+    """(competition id, provider team id) -> local team name, from explicit team mappings only.
+    Lets a club with two teams (A/B in different groups) show its own names in tables and fixtures."""
+    out={}
+    for c in comps:
+        for m in db.scalars(select(LeagueTeamMapping).where(LeagueTeamMapping.provider==c.provider,LeagueTeamMapping.season==c.season,LeagueTeamMapping.competition_external_id==c.external_id)).all():
+            team=db.get(Team,m.local_team_id)
+            if team:out[(c.id,m.team_external_id)]=team.name
+    return out
+
+def _standing_out(s,names):
+    name=names.get((s.competition_id,s.external_team_id))
+    return obj(s,**({"team_name":name,"official_name":s.team_name} if name else {}))
+
+def _fixture_out(f,names):
+    extra={}
+    for side in ("home","away"):
+        name=names.get((f.competition_id,getattr(f,f"{side}_external_id")))
+        if name:extra[f"{side}_team"]=name;extra[f"{side}_official_name"]=getattr(f,f"{side}_team")
+    return obj(f,**extra)
+
 @app.get("/api/league/synced")
 async def league_synced(_=Depends(coach_user)):
     db = SessionLocal()
     try:
         comps = db.scalars(select(LeagueCompetition)).all()
+        names = _local_names(db, comps)
         return [
-            obj(c, standings=[obj(s) for s in db.scalars(select(LeagueStanding).where(
+            obj(c, standings=[_standing_out(s, names) for s in db.scalars(select(LeagueStanding).where(
                 LeagueStanding.competition_id == c.id)).all()])
             for c in comps
         ]
@@ -491,7 +515,8 @@ async def league_results(season: str = "2026", _=Depends(coach_user)):
                           .join(LeagueCompetition, LeagueCompetition.id == LeagueFixture.competition_id)
                           .where(LeagueCompetition.season == season)
                           .order_by(LeagueFixture.match_date.desc())).all()
-        return [obj(r) for r in rows]
+        names = _local_names(db, db.scalars(select(LeagueCompetition)).all())
+        return [_fixture_out(r, names) for r in rows]
     finally:
         db.close()
 
@@ -521,7 +546,8 @@ async def league_fixtures(season: str = "2026", status: str | None = None,
         if competition:
             stmt = stmt.where(LeagueCompetition.external_id == competition)
         rows = db.scalars(stmt.order_by(LeagueFixture.match_date.desc())).all()
-        return [obj(r) for r in rows]
+        names = _local_names(db, db.scalars(select(LeagueCompetition)).all())
+        return [_fixture_out(r, names) for r in rows]
     finally:
         db.close()
 
@@ -568,7 +594,8 @@ async def league_pibfal_fixtures(season_tag: str = "2026/27", _=Depends(coach_us
                           .where(LeagueCompetition.provider == "pibfal",
                                  LeagueCompetition.season == season_tag)
                           .order_by(LeagueFixture.match_date)).all()
-        return [obj(r) for r in rows]
+        names = _local_names(db, db.scalars(select(LeagueCompetition)).all())
+        return [_fixture_out(r, names) for r in rows]
     finally:
         db.close()
 
@@ -587,7 +614,8 @@ async def league_standings_top(competition_id: str, _=Depends(coach_user)):
         rows = db.scalars(select(LeagueStanding)
                           .where(LeagueStanding.competition_id == comp.id)
                           .order_by(LeagueStanding.position)).all()
-        return [obj(r) for r in rows]
+        names = _local_names(db, [comp])
+        return [_standing_out(r, names) for r in rows]
     finally:
         db.close()
 
@@ -923,27 +951,23 @@ async def export_match_highlight(match_id:str,db:Session=Depends(get_db),_=Depen
     if not event_ids: raise HTTPException(400,"Match has no events to compile")
     job=Job(kind="highlight",payload={"event_ids":event_ids,"name":"match-highlight","overlay":True});db.add(job);db.commit();launch(export_highlight,job.id);return obj(job)
 
-def calculate_stats(events:list[Event]):
-    groups:dict[str,list[Event]]={}
-    for event in events:groups.setdefault(event.category.name,[]).append(event)
-    ids=lambda *names:[e.id for name in names for e in groups.get(name,[])]
-    count=lambda *names:len(ids(*names))
-    successful=lambda names:[e.id for name in names for e in groups.get(name,[]) if e.metadata_.get("result") in ("successful","success","won") or e.metadata_.get("outcome") in ("successful","success")]
-    saves=count("Save");conceded=count("Goal Conceded");faced=saves+conceded
-    passes=ids("Pass","Forward Pass","Backward Pass","Lateral Pass","Progressive Pass","Through Ball","Line-breaking Pass","Key Pass","Long Pass","Switch of Play")
-    pass_success=successful(["Pass","Forward Pass","Backward Pass","Lateral Pass","Progressive Pass","Through Ball","Line-breaking Pass","Key Pass","Long Pass","Switch of Play"])
-    shots=ids("Shot","Shot on Target","Goal","Blocked Shot","Off Target","Post/Bar")
-    on_target=ids("Shot on Target","Goal")+[e.id for e in groups.get("Shot",[]) if e.metadata_.get("outcome") in ("goal","saved")]
-    possessions=groups.get("Possession",[]);duration=sum(max(0,(e.end or e.timestamp)-(e.start or e.timestamp)) for e in possessions)
-    rows=[
-        ("goalkeeping","shots faced",faced,ids("Save","Goal Conceded"),"manual"),("goalkeeping","saves",saves,ids("Save"),"manual"),("goalkeeping","goals conceded",conceded,ids("Goal Conceded"),"manual"),("goalkeeping","save %",round(saves/faced*100,1) if faced else 0,ids("Save","Goal Conceded"),"calculated"),
-        ("overview","goals",count("Goal"),ids("Goal"),"manual"),("overview","shots",len(set(shots)),list(dict.fromkeys(shots)),"manual"),("overview","shots on target",len(set(on_target)),list(dict.fromkeys(on_target)),"calculated"),("overview","corners",count("Corner"),ids("Corner"),"manual"),("overview","free kicks",count("Free Kick"),ids("Free Kick"),"manual"),("overview","fouls",count("Foul"),ids("Foul"),"manual"),("overview","offsides",count("Offside"),ids("Offside"),"manual"),("overview","cards",count("Yellow Card","Red Card"),ids("Yellow Card","Red Card"),"manual"),
-        ("passing","passes",len(passes),passes,"manual"),("passing","completed passes",len(pass_success),pass_success,"manual"),("passing","pass completion %",round(len(pass_success)/len(passes)*100,1) if passes else 0,passes,"calculated"),("passing","progressive passes",count("Progressive Pass"),ids("Progressive Pass"),"manual"),("passing","long passes",count("Long Pass"),ids("Long Pass"),"manual"),("passing","key passes",count("Key Pass"),ids("Key Pass"),"manual"),("passing","crosses",count("Cross"),ids("Cross"),"manual"),
-        ("attacking","conversion rate",round(count("Goal")/len(set(shots))*100,1) if shots else 0,list(dict.fromkeys(shots)),"calculated"),("attacking","final-third entries",count("Final Third Entry"),ids("Final Third Entry"),"manual"),("attacking","penalty-area entries",count("Penalty Area Entry","Box Entry"),ids("Penalty Area Entry","Box Entry"),"manual"),
-        ("defensive","tackles",count("Tackle"),ids("Tackle"),"manual"),("defensive","interceptions",count("Interception"),ids("Interception"),"manual"),("defensive","recoveries",count("Recovery","Ball Recovery"),ids("Recovery","Ball Recovery"),"manual"),("defensive","clearances",count("Clearance"),ids("Clearance"),"manual"),("defensive","blocks",count("Block"),ids("Block"),"manual"),("transition","counterpresses",count("Counterpress"),ids("Counterpress"),"manual"),("transition","turnovers",count("Ball Loss","Forced Turnover","Unforced Turnover"),ids("Ball Loss","Forced Turnover","Unforced Turnover"),"manual"),
-        ("possession","possessions",len(possessions),[e.id for e in possessions],"manual"),("possession","average possession duration",round(duration/len(possessions),1) if possessions else 0,[e.id for e in possessions],"calculated"),
-        ("goalkeeping","1v1",count("1v1"),ids("1v1"),"manual"),("goalkeeping","high balls",count("High Ball","Catch","Cross Claim","Punch"),ids("High Ball","Catch","Cross Claim","Punch"),"manual"),("goalkeeping","distributions",count("Distribution","Short Distribution","Long Distribution","Throw","Goal Kick"),ids("Distribution","Short Distribution","Long Distribution","Throw","Goal Kick"),"manual"),("goalkeeping","tagged errors",count("GK Error","Defensive Error","Error"),ids("GK Error","Defensive Error","Error"),"manual")]
-    return [{"group":group,"name":name,"value":value,"event_ids":event_ids,"source":source} for group,name,value,event_ids,source in rows]
+@app.get("/api/dashboard/team")
+def team_dashboard(team_id:str|None=None,season:str|None=None,competition:str|None=None,date_from:date|None=None,date_to:date|None=None,
+                   location:str|None=Query(None,pattern="^(home|away)$"),opponent_id:str|None=None,result:str|None=Query(None,pattern="^[WDL]$"),
+                   last:int|None=Query(None,ge=1,le=200),player_id:str|None=None,include_unassigned:bool=True,
+                   db:Session=Depends(get_db),user:User=Depends(coach_user)):
+    # A coach bound to a team only ever sees that team; admins (and unbound
+    # coaches) pick any team, defaulting to the one most used as "our team".
+    if user.role==Role.coach and user.team_id:
+        if team_id and team_id!=user.team_id:raise HTTPException(403,"Coaches can only view their own team")
+        team_id=user.team_id
+    if not team_id:
+        team_id=db.scalar(select(Match.primary_team_id).where(Match.primary_team_id.is_not(None)).group_by(Match.primary_team_id).order_by(func.count().desc()).limit(1))
+    team=db.get(Team,team_id) if team_id else None
+    if not team:raise HTTPException(404,"Team not found")
+    if player_id and not db.scalar(select(Player.id).where(Player.id==player_id,Player.team_id==team.id)):raise HTTPException(400,"Player is not in this team")
+    return build_dashboard(db,team,season=season,competition=competition,date_from=date_from,date_to=date_to,location=location,
+                           opponent_id=opponent_id,result=result,last=last,player_id=player_id,include_unassigned=include_unassigned)
 
 @app.get("/api/matches/{match_id}/stats")
 async def stats(match_id:str,team_id:str|None=None,player_id:str|None=None,db:Session=Depends(get_db),_=Depends(current_user)):

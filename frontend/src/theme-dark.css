@@ -1,0 +1,36 @@
+/* Hand-written dark-theme fixes the generic conversion (dark-theme.mjs) cannot
+   infer: elements whose text colour comes from a variable shared with fills,
+   and text that sits on a light accent fill. Kept small on purpose. */
+:root[data-theme=dark] {--accent-text:#7fd1b3}
+:root[data-theme=dark] .libraryTop .eyebrow,
+:root[data-theme=dark] .eyebrow {color:var(--accent-text)!important}
+:root[data-theme=dark] .mainNav {background:#2a2e2d}
+:root[data-theme=dark] .mainNav button.active {background:#3a403e;color:var(--accent-text)}
+:root[data-theme=dark] .tabs button.active,
+:root[data-theme=dark] .cameraBar button.active,
+:root[data-theme=dark] .statGrid b,
+:root[data-theme=dark] .statCard b,
+:root[data-theme=dark] .leagueTopBar b,
+:root[data-theme=dark] .leaguePage .statCard b,
+:root[data-theme=dark] .videoImport legend,
+:root[data-theme=dark] .uploadPanel svg,
+:root[data-theme=dark] .splash {color:var(--accent-text)}
+:root[data-theme=dark] .tabs button.active {border-color:var(--accent-text)}
+:root[data-theme=dark] .cameraBar button.active {background:#2f3533}
+/* Lime action buttons keep dark text. */
+:root[data-theme=dark] button.notesAction,
+:root[data-theme=dark] .drawTools button.active {color:#17301d}
+/* Crests are artwork: give them a neutral tile instead of a white glare. */
+:root[data-theme=dark] .teamLogo {background:#e9ece9;border-color:#3b403e}
+:root[data-theme=dark] main.dashboard {--dash-ours:#5cc29d;--dash-against:#e0965f;--dash-avg:#9aa6ae;--dash-win:#4cb875;--dash-draw:#c9a227;--dash-loss:#e0675c}
+:root[data-theme=dark] .dashboard .res.none {color:#17301d}
+:root[data-theme=dark] .dashboard .bar em {color:#c9d3cd}
+:root[data-theme=dark] .roundBar button.active {background:#2f8f74;color:#fff}
+:root[data-theme=dark] .roundBar button.current {box-shadow:inset 0 0 0 2px var(--accent-text)}
+:root[data-theme=dark] .settingsCard .segmented button.active {color:#f1f6f2}
+:root[data-theme=dark] .settingsCard .segmented button {color:#c4ccc6}
+:root[data-theme=dark] .settingsCard .desktopUpdate a {color:#8ab4f8}
+:root[data-theme=dark] aside.statusStrip {background:#3a2e14;border-color:#8a6420;color:#f2d9a6}
+:root[data-theme=dark] aside.statusStrip.busy {background:#1f2e26;border-color:#3d5a49;color:#cfe5d7}
+/* Native controls (scrollbars, date pickers) follow the theme. */
+:root[data-theme=dark] {scrollbar-color:#4a514e #1f2221}

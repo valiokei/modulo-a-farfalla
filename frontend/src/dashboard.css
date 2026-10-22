@@ -1,0 +1,90 @@
+/* Coach dashboard. Colours go through variables so the dark theme only has to redefine them. */
+.dashboard{--dash-ours:#176e5b;--dash-against:#be693a;--dash-avg:#7c8a93;--dash-surface:#fff;--dash-grid:#e3e9ea;--dash-win:#2f8a52;--dash-draw:#8f6d00;--dash-loss:#c0453a;max-width:1280px}
+.dashFilters{box-shadow:0 8px 18px -14px #0004;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px 12px;align-items:end;margin:22px 0 16px;padding:14px;background:var(--dash-surface);border:1px solid var(--line);border-radius:12px;position:sticky;top:0;z-index:5}
+.dashFilters:not(:hover):not(:focus-within){}
+.dashFilters label{margin:0;font-size:12px;min-width:0}
+.dashFilters select,.dashFilters input{width:100%}
+.dashFilters label.check{display:flex;align-items:center;gap:7px;min-height:36px;font-weight:600;grid-column:span 2}
+.dashFilters label.check input{width:auto}
+.dashFilters select,.dashFilters input[type=date]{padding:7px 9px;min-height:36px}
+.dashFilters .ghost{grid-column:-2/-1;justify-self:end;min-height:36px;font-size:13px;padding-right:0}
+.dashKpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px}
+.dashKpis[aria-busy=true]{opacity:.6}
+.kpi{background:var(--dash-surface);border:1px solid var(--line);border-radius:11px;padding:14px 15px;display:flex;flex-direction:column;gap:3px}
+.kpi span{font-size:12px;color:var(--muted);font-weight:600}
+.kpi b{font:800 26px Manrope;color:var(--ink)}
+.kpi small{color:var(--muted);font-size:12px;display:flex;align-items:center;gap:5px;min-height:16px}
+.kpi .form{display:flex;gap:4px}
+.kpi .form{min-height:34px;align-items:center}
+.kpi .form i,.res{font-style:normal;font:700 13px 'DM Sans';color:#fff;border-radius:6px;padding:3px 7px;min-width:24px;text-align:center;display:inline-block;font-variant-numeric:tabular-nums}
+.res{min-width:44px}
+.res.none{background:var(--dash-avg)}
+.form i.W,.res.W{background:var(--dash-win)}.form i.D,.res.D{background:var(--dash-draw)}.form i.L,.res.L{background:var(--dash-loss)}
+.trend{display:inline-flex;align-items:center;gap:3px;font-weight:700;font-size:12px;border-radius:20px;padding:2px 7px;white-space:nowrap}
+.trend.up{color:var(--dash-win);background:color-mix(in srgb,var(--dash-win) 13%,transparent)}
+.trend.down{color:var(--dash-loss);background:color-mix(in srgb,var(--dash-loss) 13%,transparent)}
+.trend.flat{color:var(--muted);background:color-mix(in srgb,var(--muted) 12%,transparent)}
+.dashCard{background:var(--dash-surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px;overflow-x:auto}
+.dashCard h2{font:700 17px Manrope;margin:0 0 10px}
+.dashCardHead{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+.dashCardHead h2{margin:0}
+.dashCardHead label{margin:0;display:flex;align-items:center;gap:8px;font-size:12px}
+.dashCardHead select{padding:7px 9px;min-height:36px}
+.dashGrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch;margin-bottom:16px}.dashGrid>.dashCard{margin-bottom:0}
+@media(max-width:900px){.dashGrid{grid-template-columns:1fr}}
+.trendChart{width:100%;height:auto;display:block}
+.trendChart .grid{stroke:var(--dash-grid);stroke-width:1}
+.trendChart .axis{fill:var(--muted);font-size:11px}
+.trendChart .avg{stroke:var(--dash-avg);stroke-dasharray:5 5;stroke-width:1.4}
+.trendChart polyline{fill:none;stroke-width:2.6;stroke-linejoin:round;stroke-linecap:round}
+.trendChart .ours{stroke:var(--dash-ours)}.trendChart .against{stroke:var(--dash-against);stroke-dasharray:6 5;stroke-width:2}
+.trendChart .dot{stroke:var(--dash-surface);stroke-width:2;fill:var(--dash-avg)}
+.legend .dot.none{background:var(--dash-avg)}
+.trendChart .dot.W,.legend .dot.W{fill:var(--dash-win);background:var(--dash-win)}.trendChart .dot.D,.legend .dot.D{fill:var(--dash-draw);background:var(--dash-draw)}.trendChart .dot.L,.legend .dot.L{fill:var(--dash-loss);background:var(--dash-loss)}
+.legend{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:12px;color:var(--muted);margin:8px 0 0}
+.legend i{display:inline-block;width:18px;height:3px;border-radius:2px}
+.legend i.ours{background:var(--dash-ours)}.legend i.against{background:var(--dash-against)}.legend i.avg{background:repeating-linear-gradient(90deg,var(--dash-avg) 0 4px,transparent 4px 7px)}
+.legend .dot{display:inline-block;width:10px;height:10px;border-radius:50%}
+.dashTable{width:100%;border-collapse:collapse;font-size:13px}
+.dashTable th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:8px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.dashTable th button{background:none;padding:0;font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit}
+.dashTable th button.sorted{color:var(--ink)}
+.dashTable td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.dashTable td.num{font-variant-numeric:tabular-nums}
+.dashTable th.num{text-align:right}
+.dashTable td.num{text-align:right;white-space:nowrap}
+.ghost.small{padding:5px 10px;border:1px solid var(--dash-ours);color:var(--dash-ours);font-size:12px;font-weight:600}
+.dashTable td small{display:block;color:var(--muted);font-size:11px}
+.dashTable td small.warn{color:var(--dash-against)}
+.dashTable tbody tr:hover,.dashTable tr.selected{background:color-mix(in srgb,var(--dash-ours) 7%,transparent)}
+.dashTable tr.clickable,.metricTable tbody tr{cursor:pointer}
+.metricTable td:first-child b{text-transform:capitalize}
+.spark polyline{stroke:var(--dash-ours)}
+.bars{display:flex;align-items:end;gap:10px;height:220px;padding-top:18px}
+.barGroup{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;height:100%}
+.barPair{flex:1;width:100%;display:flex;align-items:end;justify-content:center;gap:3px}
+.bar{width:42%;border-radius:4px 4px 0 0;min-height:2px;position:relative}
+.bar em{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);font:600 11px 'DM Sans';font-style:normal;color:var(--muted);padding-bottom:2px}
+.bar.ours{background:var(--dash-ours)}.bar.against{background:var(--dash-against);opacity:.75}
+.barGroup small{font-size:11px;color:var(--muted)}
+.zoneGrid{display:grid;gap:3px;aspect-ratio:1.55;background:#397b45;padding:6px;border-radius:8px}
+.zoneGrid{position:relative}
+.zoneGrid span{display:grid;place-items:center;border-radius:4px;color:#fff;font-weight:700;font-size:13px;text-shadow:0 1px 2px #0009;background:color-mix(in srgb,#e8ff5a calc(var(--heat) * 100%),#1f5a2c);border:1px solid #ffffff33}
+.dashCatBars{display:grid;gap:7px}
+.dashCatRow{display:grid;grid-template-columns:minmax(120px,190px) 1fr 70px;gap:10px;align-items:center;font-size:13px}
+.dashCatRow div{display:flex;flex-direction:column;gap:2px}
+.dashCatRow i{height:9px;border-radius:4px;min-width:2px}
+.dashCatRow i.ours{background:var(--dash-ours)}.dashCatRow i.against{background:var(--dash-against);opacity:.75}
+.dashCatRow b small{color:var(--muted);font-weight:500}
+.zoneGrid span.hot{color:#17301d;text-shadow:none}
+.dashGrid>.dashCard{height:100%;display:flex;flex-direction:column}.dashGrid .bars{flex:1;min-height:220px}
+/* Official league results: shown even when no match has been analysed yet. */
+.dashOfficialSummary{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin:6px 0 12px}
+.dashOfficialSummary span{display:flex;flex-direction:column;gap:3px;padding:10px 12px;border:1px solid var(--line);border-radius:10px}
+.dashOfficialSummary small{font-size:12px;color:var(--muted);font-weight:600}
+.dashOfficialSummary b{font:800 22px Manrope;color:var(--ink)}
+.dashOfficialSummary .form{display:flex;gap:4px;align-items:center;min-height:28px}
+.dashOfficialSummary .form i{font-style:normal;font:700 13px 'DM Sans';color:#fff;border-radius:6px;padding:3px 7px;min-width:24px;text-align:center}
+.dashNext{margin:10px 0 0;font-size:13px}
+.dashOfficialNote{margin:8px 0 0;font-size:12px}
+

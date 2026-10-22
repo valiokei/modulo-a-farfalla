@@ -25,6 +25,8 @@ TEXT = {
         "error": "Impossibile avviare. Consulta logs/desktop.log nella cartella dati.",
         "busy": "Un'altra istanza sta avviando l'applicazione. Attendi e riprova.",
         "ai": "L'analisi IA non e' inclusa in questa distribuzione desktop. Tagging manuale ed esportazioni sono disponibili.",
+        "ai_setup": "Il runtime IA opzionale non e' installato: apri la scheda IA dell'app per scaricarlo.",
+        "ai_ready": "Runtime IA locale installato e attivo.",
     },
     "en": {
         "title": "Modulo a Farfalla",
@@ -33,6 +35,8 @@ TEXT = {
         "error": "Unable to start. See logs/desktop.log in the data folder.",
         "busy": "Another instance is starting. Wait and try again.",
         "ai": "AI analysis is not included in this desktop distribution. Manual tagging and exports are available.",
+        "ai_setup": "The optional AI runtime is not installed: open the AI tab in the app to download it.",
+        "ai_ready": "Local AI runtime installed and active.",
     },
 }
 
@@ -141,14 +145,25 @@ def load_config(root: Path) -> dict:
 
 def configure_environment(root: Path, config: dict) -> None:
     # Explicit values prevent inherited server settings from connecting to production.
+    from desktop import ai_runtime
+    runtime_ready = ai_runtime.status(root).get("phase") == "ready"
     environment = {
         "DATABASE_URL": "sqlite:///" + (root / "touchline.db").as_posix(),
         "STORAGE_ROOT": str(root / "storage"), "SECRET_KEY": config["secret_key"],
         "BOOTSTRAP_ADMIN_EMAIL": ADMIN_EMAIL, "BOOTSTRAP_ADMIN_PASSWORD": config["bootstrap_password"],
         "COOKIE_SECURE": "false", "CORS_ORIGINS": "", "BACKGROUND_WORKERS": "1", "FFMPEG_THREADS": "2",
-        "AI_ENABLED": "false", "AI_PYTHON": "", "AI_DEVICE": "cpu", "MEDIA_ACCELERATION": "auto", "FORCE_HARDWARE": "",
+        "AI_ENABLED": "true" if runtime_ready else "false", "AI_PYTHON": "", "AI_DEVICE": "cpu",
+        "MEDIA_ACCELERATION": "auto", "FORCE_HARDWARE": "",
         "WORKER_NICE": "10", "MAX_UPLOAD_GB": "20",
     }
+    if runtime_ready:
+        # The on-demand runtime lives in the data folder: portable interpreter,
+        # shared site-packages and an offline model cache. A running instance
+        # keeps the values it started with (restart to activate a new install).
+        targets = ai_runtime.paths(root)
+        environment["AI_PYTHON"] = str(targets["python"])
+        environment["AI_PYTHONPATH"] = str(targets["pythonpath"])
+        environment["AI_HF_HOME"] = str(targets["hf"])
     os.environ.update(environment)
     binary_root = resource_root() / "ffmpeg"
     if binary_root.is_dir():
@@ -224,8 +239,9 @@ def initialize_local_user(config: dict) -> str:
 
 def create_application(frontend: Path, application_id: str, origin: str, language: str = "it",
                        local_user_email: str = DESKTOP_USER_EMAIL,
-                       shutdown=None, diagnostics=None):
+                       shutdown=None, diagnostics=None, ai_available: bool = False, ai_root: Path | None = None):
     from app.main import app
+    from desktop import ai_runtime
     from fastapi import Request
     from fastapi.responses import FileResponse, JSONResponse
     from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -238,8 +254,9 @@ def create_application(frontend: Path, application_id: str, origin: str, languag
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             if request.headers.get("origin") not in {None, origin} or request.headers.get("sec-fetch-site") == "cross-site":
                 return JSONResponse({"detail": "Cross-site request denied"}, status_code=403)
-        if request.method == "POST" and request.url.path == "/api/ai/jobs":
-            return JSONResponse({"detail": TEXT[language]["ai"]}, status_code=503)
+        if request.method == "POST" and request.url.path == "/api/ai/jobs" and not ai_available:
+            key = "ai_setup" if (ai_root and ai_runtime.supported()) else "ai"
+            return JSONResponse({"detail": TEXT[language][key]}, status_code=503)
         if request.method == "POST" and request.url.path == "/api/auth/login":
             return JSONResponse({"detail": "Login is not used by the local desktop edition"},status_code=404)
         response = await call_next(request)
@@ -263,6 +280,12 @@ def create_application(frontend: Path, application_id: str, origin: str, languag
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
+    def ai_state() -> dict:
+        state = ai_runtime.status(ai_root) if ai_root else {"phase": "unsupported", "supported": False,
+                                                            "progress": 0, "error": "", "version": ""}
+        state["active"] = ai_available
+        return state
+
     @app.get("/desktop/health", include_in_schema=False)
     def desktop_health():
         from app.media import hardware_backend
@@ -272,7 +295,7 @@ def create_application(frontend: Path, application_id: str, origin: str, languag
         else:
             video = {"selected": hardware_backend(), "playback": "browser_managed"}
         return {"application_id": application_id, "mode": "local", "workers": 1,
-                "ai_bundled": False, "video": video}
+                "ai_bundled": False, "video": video, "ai": ai_state()}
 
     from desktop import update
     from desktop.diagnostics import PROFILES
@@ -336,6 +359,30 @@ def create_application(frontend: Path, application_id: str, origin: str, languag
                 diagnostics.event("update_failed", operation="update", error_code=code)
             return JSONResponse({"detail": detail, "code": code}, status_code=503)
 
+    @app.get("/desktop/ai/status", include_in_schema=False)
+    def ai_runtime_status():
+        return ai_state()
+
+    @app.post("/desktop/ai/install", include_in_schema=False)
+    def ai_runtime_install():
+        if not ai_root or not ai_runtime.supported():
+            return JSONResponse({"detail": "AI runtime installation is not available in this build", "code": "unsupported"},
+                                status_code=503)
+        state = ai_runtime.start(ai_root)
+        if diagnostics:
+            diagnostics.event("client_action", operation="other")
+        return state
+
+    @app.post("/desktop/ai/remove", include_in_schema=False)
+    def ai_runtime_remove():
+        if not ai_root:
+            return JSONResponse({"detail": "AI runtime is not managed by this build", "code": "unsupported"}, status_code=503)
+        try:
+            ai_runtime.remove(ai_root)
+        except RuntimeError as exc:
+            return JSONResponse({"detail": str(exc), "code": "busy"}, status_code=409)
+        return ai_state()
+
     app.mount("/assets", StaticFiles(directory=frontend / "assets"), name="desktop-assets")
 
     @app.get("/{path:path}", include_in_schema=False)
@@ -387,9 +434,11 @@ def run_server(root: Path, config: dict, *, headless: bool = False, ready_file: 
         raise RuntimeError("Frontend build is missing")
     from desktop.diagnostics import Diagnostics
     diagnostics = Diagnostics(root)
+    from desktop import ai_runtime
     app = create_application(frontend, config["application_id"], origin, config["language"],
                              local_user_email=config.get("analyst_email",DESKTOP_USER_EMAIL),
-                             shutdown=lambda: setattr(server, "should_exit", True), diagnostics=diagnostics)
+                             shutdown=lambda: setattr(server, "should_exit", True), diagnostics=diagnostics,
+                             ai_available=ai_runtime.status(root).get("phase") == "ready", ai_root=root)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, workers=1,
                                          proxy_headers=False, access_log=False, log_config=None))
     atomic_json(root / "instance.json", {"port": port})

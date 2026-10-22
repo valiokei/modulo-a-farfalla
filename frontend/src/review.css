@@ -46,3 +46,35 @@
 @media(max-width:1100px){.analysis .workspace{grid-template-columns:minmax(0,1fr) 290px}.analysis .brand{font-size:17px}.analysis .brand>span{width:28px;height:28px}.analysis>header{padding:8px 12px}.analysis .viewer{padding:10px}.analysis .editor .two{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:900px){#root:has(>.analysis){height:auto;min-height:100dvh;overflow:visible}.analysis{height:auto;min-height:0;overflow:visible}.analysis .workspace{display:flex;flex-direction:column}.analysis .videoWrap{max-width:none}.analysis .matchTitle{display:flex}.analysis .sidePanel{border-left:0;overflow:visible}.analysis .viewer{overflow:visible}.analysis .editor .two{grid-template-columns:repeat(2,minmax(0,1fr))}.analysis .controls b{display:block;margin-left:auto}.analysis>header .brand{display:none}.analysis .sidePanel>.tabs{position:sticky;top:0}.analysis .eventList small{max-width:none}}
 @media(max-width:520px){.analysis>header{gap:4px;padding:8px}.analysis .matchTitle{flex-basis:calc(100% - 44px);min-width:0}.analysis>header .ghost{padding:7px;font-size:12px}.analysis>header a.ghost{font-size:12px}.analysis>header .ghost:last-child{font-size:12px}.analysis .viewer{padding:8px}.analysis .controls{gap:4px}.analysis .controls b{font-size:12px}.analysis .controls button{min-width:30px}.analysis .tabs button{font-size:13px;padding:13px 8px}.analysis .editor .two{grid-template-columns:1fr}.drawTools.compact{left:6px;top:6px;gap:4px;padding:5px;max-width:calc(100% - 53px)}.drawToggle{right:6px;top:6px}.drawTools.compact .toolBtns button,.drawTools.compact .histBtns button,.drawTools.compact .drawSave{width:32px;height:32px}.drawTools.compact input{width:60px}.drawingState{font-size:10px}}
+/* Analysis layout (desktop widths): the screen is exactly the viewport. The
+   video takes the largest box of its aspect ratio that fits the space left by
+   the header, camera/notes rows, controls and timeline; only the side panel
+   lists scroll. */
+@media(min-width:901px){
+.analysis>header{flex-wrap:nowrap;min-height:0;padding:8px 14px;gap:10px}
+.analysis>header .brand{display:none}
+.analysis>header .ghost,.analysis>header a.ghost{white-space:nowrap;flex:none}
+.analysis .matchTitle{flex:1 1 auto;min-width:0;overflow:hidden}
+.analysis .matchTitle .matchNames{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.analysis .matchTitle small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.analysis .viewer{padding:10px 12px;overflow:hidden;min-height:0}
+.analysis .cameraBar{margin-bottom:4px}
+.analysis .notesBar{margin:0 0 6px;min-height:36px}
+.analysis .videoStage{flex:1 1 0;min-height:160px;container-type:size;display:flex;justify-content:center;align-items:flex-start}
+.analysis .videoColumn{--below-video:calc(52px + var(--timeline-h,98px));width:min(100cqw,calc((100cqh - var(--below-video))*var(--video-aspect,1.7778)));display:flex;flex-direction:column}
+.analysis .videoColumn .timelineBlock{height:var(--timeline-h,98px);overflow:hidden}
+.analysis .videoColumn .videoWrap{max-width:none;width:100%;border-radius:8px 8px 0 0}
+.analysis .videoColumn .controls{flex-wrap:nowrap;height:52px;min-height:0;overflow:hidden}
+.analysis .timelineBlock{flex:none}
+}
+.drawing.open .drawTextInput{position:absolute;z-index:3;min-width:160px;max-width:70%;padding:2px 6px;border:2px dashed currentColor;border-radius:4px;background:#0009;font-weight:700;font-family:'DM Sans',sans-serif;line-height:1.1;outline:none;cursor:text}
+.drawing.open.tool-select{cursor:default}
+.drawing.open .drawSelection{filter:drop-shadow(0 0 1px #000)}
+.drawing.open .drawItemBar{position:absolute;z-index:4;display:flex;gap:2px;padding:3px;transform:translateY(calc(-100% - 46px));border-radius:8px;background:#101814e6;box-shadow:0 2px 10px #0006}
+.drawing.open .drawItemBar button{display:grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:6px;background:transparent;color:#fff;cursor:pointer}
+.drawing.open .drawItemBar button:hover:not(:disabled){background:#ffffff26}
+.drawing.open .drawItemBar button:disabled{opacity:.4;cursor:default}
+.drawing.open .drawItemBar button.danger:hover{background:#c0392b}
+.drawing.open .drawItemBar.below{transform:translateY(22px)}
+.drawing.open svg,.drawing.open svg text{user-select:none;-webkit-user-select:none;-webkit-user-drag:none}
+.drawTools .drawHint{font-size:12px;opacity:.85;max-width:260px;line-height:1.2}

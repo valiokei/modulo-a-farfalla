@@ -108,6 +108,20 @@ def _clean(value: str) -> str:
     return " ".join(unescape(value).split())
 
 
+def round_from_game_number(row_html: str) -> str:
+    """Round ("5.kolo") from the official FAČR match number of a fixture row.
+
+    The number (e.g. ``2026110A5B0503``) ends with two digits for the round and
+    two for the match within it; verified on fotbalpraha.cz where filtering a
+    page by ``id_round=N`` returns only numbers whose round digits equal N. Any
+    other shape yields "" — the round is never guessed from the date.
+    """
+    match = re.search(r'class="game_number"[^>]*>\s*(\d{4}\w+?)(\d{2})(\d{2})\s*<', row_html)
+    if not match or int(match.group(2)) == 0:
+        return ""
+    return f"{int(match.group(2))}.kolo"
+
+
 def leading_competition_id(value: str | None) -> str | None:
     """Numeric competition id from a '753-9-liga-...' slug or a bare '753'."""
     match = re.match(r"(\d+)", value or "")
@@ -281,6 +295,9 @@ class PragueFootballAssociationProvider:
                 return _clean(m.group(1)) if m else ""
             short_n = grab('middle')
             abbr = grab('short')
+            # The link holds three spans (long/middle/short); the bare link text
+            # concatenates them ("Ambassadors FC Praha Ambassadors AMB").
+            name = grab('long') or name
             if not abbr and len(name) >= 3:
                 abbr = name[-3:]
             # cells: [pos, FullName Abbreviation, Z, V, R, P, Skore, B, BK, +/-/RG, ...]
@@ -553,7 +570,7 @@ class PragueFootballAssociationProvider:
             home_m = re.search(r'class="team team--home">.*?/tym/(\d+)-', tr, re.S)
             away_m = re.search(r'class="team team--away">.*?/tym/(\d+)-', tr, re.S)
             results.append(MatchResult(
-                id=zap_id, round_label="", date=date, time=clean(1),
+                id=zap_id, round_label=round_from_game_number(tr), date=date, time=clean(1),
                 competition_id=competition_id, venue="", attendance="", referee="",
                 home=txt(home.group(1)) if home else "", away=txt(away.group(1)) if away else "",
                 home_score=hs, away_score=as_,

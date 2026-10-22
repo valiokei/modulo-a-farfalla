@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Modulo a Farfalla</title>
+    <script>
+      // Apply the saved theme before the first paint (no white flash in dark mode).
+      (function () { try { var c = localStorage.getItem('touchline_theme'); var d = c === 'dark' || (c !== 'light' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches); document.documentElement.dataset.theme = d ? 'dark' : 'light'; } catch (e) {} })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

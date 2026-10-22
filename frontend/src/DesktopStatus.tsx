@@ -1,26 +1,24 @@
-import {useEffect, useState} from 'react';
-import {AlertTriangle, Cpu, MonitorPlay} from 'lucide-react';
+import {useEffect, useState, type ReactNode} from 'react';
+import {AlertTriangle, Download, RefreshCw, Sparkles} from 'lucide-react';
 import {t, useI18n} from './i18n';
 import './desktop.css';
-import {DesktopUpdate} from './DesktopUpdate';
-import {DesktopDiagnostics} from './DesktopDiagnostics';
 
 export const isDesktop = import.meta.env.VITE_DESKTOP === 'true';
 
-type VideoStatus = {
-  selected: string;
-  last_operation?: {encoder: string; decoder: string; fallback: boolean};
-};
+type AiStatus = {phase?: string; supported?: boolean; active?: boolean; progress?: number};
+type UpdateState = {update_available?: boolean; latest_version?: string};
 
-export function DesktopAIWarning() {
-  return <p className="desktopAiWarning" role="status"><AlertTriangle size={18}/>{t('desktop_ai_unavailable')}</p>;
-}
-
-export function DesktopStatus() {
+/**
+ * One-line strip shown above the app only when something needs attention
+ * (backend unreachable, update available, AI runtime installing or waiting for a
+ * restart). Everything else — encoder, versions, diagnostics, AI install — lives
+ * in Settings, so the strip takes no space in normal use.
+ */
+export function DesktopStatus({openSettings}: {openSettings?: () => void}) {
   useI18n();
-  const [video, setVideo] = useState<VideoStatus>();
+  const [ai, setAi] = useState<AiStatus>();
+  const [update, setUpdate] = useState<UpdateState>();
   const [failed, setFailed] = useState(false);
-  const [playback, setPlayback] = useState('desktop_playback_unknown');
   useEffect(() => {
     if (!isDesktop) return;
     document.body.classList.add('desktop-app');
@@ -34,39 +32,24 @@ export function DesktopStatus() {
         const response = await fetch('/desktop/health', {cache: 'no-store'});
         if (!response.ok) throw new Error('health');
         const health = await response.json();
-        if (!stopped) {setVideo(health.video); setFailed(false);}
+        if (!stopped) {setAi(health.ai); setFailed(false);}
       } catch {if (!stopped) setFailed(true);}
     };
-    void poll();
+    const checkUpdate = () => fetch('/desktop/update/check', {cache: 'no-store'}).then((r) => r.ok ? r.json() : undefined)
+      .then((body) => {if (!stopped && body) setUpdate(body);}).catch(() => undefined);
+    void poll(); void checkUpdate();
     const timer = setInterval(poll, 5000);
-    const checkPlayback = async (event: Event) => {
-      const element = event.target;
-      if (!(element instanceof HTMLVideoElement) || !navigator.mediaCapabilities) return;
-      try {
-        const result = await navigator.mediaCapabilities.decodingInfo({
-          type: 'file',
-          video: {contentType: 'video/mp4; codecs="avc1.640033"',
-            width: element.videoWidth, height: element.videoHeight,
-            bitrate: 8_000_000, framerate: 30}
-        });
-        if (!stopped) setPlayback(result.supported
-          ? (result.powerEfficient ? 'desktop_playback_efficient' : 'desktop_playback_software')
-          : 'desktop_playback_unknown');
-      } catch {if (!stopped) setPlayback('desktop_playback_unknown');}
-    };
-    document.addEventListener('loadedmetadata', checkPlayback, true);
-    return () => {stopped = true; clearInterval(timer); document.removeEventListener('loadedmetadata', checkPlayback, true);};
+    const updateTimer = setInterval(checkUpdate, 12 * 60 * 60 * 1000);
+    return () => {stopped = true; clearInterval(timer); clearInterval(updateTimer);};
   }, []);
   if (!isDesktop) return null;
-  const vendor = (value?: string) => value === 'cpu' ? 'CPU' : value?.toUpperCase();
-  return <aside className="desktopStatus" aria-label={t('desktop_video_status')}>
-    <span><Cpu size={18}/><b>{t('desktop_encoding')}:</b> {failed ? t('desktop_unavailable') :
-      video ? vendor(video.selected) : t('desktop_detecting')}</span>
-    {video?.last_operation && <span><b>{t('desktop_last_encode')}:</b> {vendor(video.last_operation.encoder)}
-      {video.last_operation.fallback && <em>{t('desktop_fallback')}</em>}</span>}
-    <span title={t('desktop_playback_hint')}><MonitorPlay size={18}/>{t(playback)}</span>
-    <DesktopAIWarning/>
-    <DesktopUpdate/>
-    <DesktopDiagnostics/>
-  </aside>;
+  const installing = ['starting', 'downloading', 'verifying', 'extracting'].includes(ai?.phase || '');
+  let body: ReactNode = null, tone = '';
+  if (failed) body = <><AlertTriangle size={16}/>{t('status_backend_unreachable')}</>;
+  else if (installing) {tone = 'busy'; body = <><Download size={16}/>{t('desktop_ai_downloading')}<progress value={ai?.progress || 0} max="100"/>{ai?.progress || 0}%</>;}
+  else if (ai?.phase === 'ready' && !ai.active) {tone = 'busy'; body = <><RefreshCw size={16}/>{t('desktop_ai_restart_short')}</>;}
+  else if (update?.update_available) body = <><Sparkles size={16}/>{t('desktop_update_available')}: {update.latest_version}</>;
+  if (!body) return null;
+  return <aside className={`statusStrip ${tone}`} role="status" aria-live="polite">{body}
+    {openSettings && <button type="button" onClick={openSettings}>{t('settings_open')}</button>}</aside>;
 }

@@ -33,6 +33,39 @@ Server operators must review the exact upstream code, model and deployment
 terms before enabling or redistributing the AI runtime. The project does not
 grant commercial rights to those upstream components.
 
+## On-demand AI runtime packs (Win64 and Linux x64)
+
+The optional Windows "AI runtime" download (`ai-runtime-win64-1` prerelease)
+and the Linux x64 one (`ai-runtime-linux-x64-1` prerelease), built by
+`scripts/build-ai-pack.sh` and installed by `desktop/ai_runtime.py`,
+redistribute, unmodified, the same components per platform:
+
+- **CPython 3.12.15** (python-build-standalone, PSF licence) — its `LICENSE.txt`
+  is included in the `python` component.
+- **torch 2.14.0+cpu / torchvision 0.29.0+cpu** — Apache-2.0 with LLVM
+  exception, BSD-2-Clause, BSD-3-Clause, BSL-1.0 and MIT components
+  (per-wheel `License-Expression` metadata); licence files are included in
+  each wheel's `dist-info/licenses/`. The Windows wheels are the `win_amd64`
+  build and the Linux wheels the `manylinux` build of the same versions; the
+  Linux tree is produced by `scripts/build-ai-linux-site-packages.sh`.
+- **opensportslib 0.3.0.dev21** — **AGPL-3.0** (see `LICENSE` and
+  `LICENSE-COMMERCIAL` in its `dist-info/licenses/`); a wheel of the pinned
+  revision `4757f4f7f7b8b017cc5e84d58036e58a163e57b2`.
+- **decord 0.6.0** (Apache-2.0) and its bundled FFmpeg shared libraries
+  (`avcodec-58` etc., LGPL/GPL per FFmpeg build — the wheel ships its own
+  copies); plus the other pinned wheels from the build script (opencv,
+  transformers, pytorch-lightning, sklearn, …), each with its licence files
+  retained in the extracted `site-packages`.
+- **Model weights** `OpenSportsLab/OSL-loc-snbas-2025-e2e` (snapshot
+  `54e24a663a5a0ed057ef12cf16d9460d270ddc6e`) — declared **AGPL-3.0** on its
+  model card. The same cache is served to both platforms.
+
+Redistributing this pack (or installing it inside another distribution) is
+gated on the same human licensing review as the server AI. The pack stays a
+**prerelease** so it is not offered as an application update; the desktop app
+keeps AI off until the user installs it explicitly. Do not bundle the pack
+into the installer or the AppImage without that review.
+
 ## Dependency inventory status
 
 Backend direct dependencies are pinned in `backend/requirements.txt`; frontend

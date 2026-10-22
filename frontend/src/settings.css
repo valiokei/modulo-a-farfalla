@@ -1,0 +1,25 @@
+.settingsPage{max-width:920px}
+.settingsCard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-top:16px}
+.settingsCard h2{display:flex;align-items:center;gap:9px;font:700 17px Manrope;margin:0 0 12px}
+.settingsRow{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:12px 0;border-top:1px solid var(--line);flex-wrap:wrap}
+.settingsRow:first-of-type{border-top:0;padding-top:4px}
+.settingsRow>span{display:flex;flex-direction:column;gap:3px;min-width:0}
+.settingsRow>span b{display:inline-flex;align-items:center;gap:6px}
+.settingsRow small{color:var(--muted);font-size:12px}
+.segmented{display:inline-flex;padding:3px;border-radius:9px;background:var(--line);gap:2px}
+.segmented button{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:7px;background:transparent;color:var(--muted);font-weight:600;font-size:13px}
+.segmented button.active{background:var(--card);color:var(--ink);box-shadow:0 1px 3px #0002}
+/* Inside Settings the desktop widgets drop their banner chrome. */
+.settingsCard .desktopUpdate,.settingsCard .desktopDiagnostics{max-width:none;margin:0;border:0;background:transparent;padding:0}
+.settingsCard .desktopDiagnostics>summary{display:none}
+.settingsCard .desktopAiCard{max-width:none}
+/* Compact status strip: one line, only when something needs attention. */
+.statusStrip{display:flex;align-items:center;gap:10px;padding:6px 20px;font-size:13px;border-bottom:1px solid #d99a35;background:#fff8e9;color:#563800}
+.statusStrip.busy{border-color:#b8c8bd;background:#e6f0ea;color:#193b2a}
+.statusStrip button{margin-left:auto;background:transparent;color:inherit;font-weight:700;text-decoration:underline;padding:2px 4px}
+.statusStrip progress{width:140px}
+.headerTools{display:flex;align-items:center;gap:4px;margin-left:auto}
+.headerTools>button{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:8px;background:transparent;color:var(--muted)}
+.headerTools>button:hover,.headerTools>button.active{background:var(--line);color:var(--ink)}
+header .headerTools ~ .ghost:last-child{margin-left:0}
+.settingsCard .desktopUpdateHead>div>b,.settingsCard .desktopUpdateHead>div>svg{display:none}

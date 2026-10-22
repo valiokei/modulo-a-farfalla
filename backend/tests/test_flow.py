@@ -311,6 +311,12 @@ async def user_administration():
         assert (await admin.delete(f"/api/users/{coach['id']}")).status_code==204
         assert (await admin.delete(f"/api/users/{player_user['id']}")).status_code==204
         assert (await admin.delete(f"/api/matches/{match['id']}")).status_code==204
+        # Deleting a match removes its dependent rows (SQLite enforces the declared cascades).
+        from sqlalchemy import text
+        with SessionLocal() as db:
+            assert db.execute(text("select count(*) from events where match_id=:m"),{"m":match["id"]}).scalar()==0
+            assert db.execute(text("select count(*) from videos where match_id=:m"),{"m":match["id"]}).scalar()==0
+            assert db.execute(text("pragma foreign_key_check")).fetchall()==[]
 
 
 def test_team_logos():

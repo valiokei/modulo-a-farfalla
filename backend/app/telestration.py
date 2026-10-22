@@ -4,6 +4,7 @@ import math
 import re
 from pathlib import Path
 import tempfile
+import unicodedata
 
 import cv2
 import numpy as np
@@ -57,6 +58,8 @@ def raster_shape(shape, width, height):
     elif kind == "rectangle":
         if fill[3]: cv2.rectangle(layer, a, b, fill, -1)
         cv2.rectangle(layer, a, b, stroke, thickness, cv2.LINE_AA)
+    elif kind in {"text", "player-label"}:
+        draw_text(layer, shape, a, width, stroke)
     elif kind in {"circle", "ellipse", "spotlight"}:
         center = ((a[0] + b[0]) // 2, (a[1] + b[1]) // 2)
         axes = (abs(a[0] - b[0]) // 2, abs(a[1] - b[1]) // 2)
@@ -65,6 +68,128 @@ def raster_shape(shape, width, height):
     else:
         raise ValueError(f"Unsupported annotation shape: {kind}")
     return layer
+
+
+# Accent marks drawn by hand: OpenCV's Hershey fonts only contain ASCII glyphs.
+_MARKS = {"\u0301": "acute", "\u0300": "grave", "\u030c": "caron", "\u0302": "circumflex", "\u030a": "ring",
+          "\u0308": "diaeresis", "\u0303": "tilde", "\u030b": "double_acute", "\u0327": "cedilla", "\u0328": "ogonek"}
+_SPECIAL = {"ß": "ss", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L",
+            "\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"', "\u2013": "-", "\u2014": "-", "\u2026": "..."}
+
+
+def _glyphs(text):
+    """Split text into (ascii_base, [mark, ...]) pairs; unknown characters become '?'."""
+    out = []
+    for char in text:
+        if char == "\u00b0":  # degree sign: a raised ring
+            out.append(("o", ["degree"]))
+            continue
+        char = _SPECIAL.get(char, char)
+        decomposed = unicodedata.normalize("NFD", char)
+        base = "".join(c for c in decomposed if not unicodedata.combining(c))
+        marks = [_MARKS[c] for c in decomposed if c in _MARKS]
+        base = base if base.isascii() and base.isprintable() else "?"
+        out.append((base, marks))
+    return out
+
+
+def _advances(glyphs, font, scale):
+    """Per-glyph advances from cumulative widths (getTextSize pads every call by the thickness)."""
+    text, widths = "", [0]
+    for base, _ in glyphs:
+        text += base
+        widths.append(cv2.getTextSize(text, font, scale, 1)[0][0])
+    return [b - a for a, b in zip(widths, widths[1:])]
+
+
+def _text_width(glyphs, font, scale, thickness):
+    return sum(_advances(glyphs, font, scale)) + thickness
+
+
+def _put_marks(layer, marks, base, left, baseline, advance, scale, font, color, thickness):
+    cap = cv2.getTextSize("H", font, scale, 1)[0][1]
+    x_height = cv2.getTextSize("x", font, scale, 1)[0][1]
+    tall = base.isupper() or base.isdigit() or base in "bdfhklt"
+    top = baseline - (cap if tall else x_height)
+    cx, gap, w, h = left + advance // 2, max(2, round(cap * .14)), max(2, round(cap * .2)), max(2, round(cap * .22))
+    mark_top, mark_bottom = top - gap - h, top - gap
+    line = lambda pts: cv2.polylines(layer, [np.array(pts, dtype=np.int32)], False, color, thickness, cv2.LINE_AA)
+    for mark in marks:
+        if mark == "degree":
+            continue
+        if mark == "caron" and base in "dtlL":  # Czech ď ť ľ Ľ: apostrophe-like caron beside the letter
+            x = left + advance
+            line([(x, baseline - cap), (x - w // 2, baseline - cap + h + w // 2)])
+        elif mark == "acute": line([(cx - w // 2, mark_bottom), (cx + w // 2, mark_top)])
+        elif mark == "grave": line([(cx - w // 2, mark_top), (cx + w // 2, mark_bottom)])
+        elif mark == "double_acute":
+            for dx in (-w // 2 - 1, w // 2 + 1): line([(cx + dx - w // 3, mark_bottom), (cx + dx + w // 3, mark_top)])
+        elif mark == "caron": line([(cx - w, mark_top), (cx, mark_bottom), (cx + w, mark_top)])
+        elif mark == "circumflex": line([(cx - w, mark_bottom), (cx, mark_top), (cx + w, mark_bottom)])
+        elif mark == "ring": cv2.circle(layer, (cx, (mark_top + mark_bottom) // 2), max(2, h // 2 + 1), color, thickness, cv2.LINE_AA)
+        elif mark == "diaeresis":
+            for dx in (-w, w): cv2.circle(layer, (cx + dx, (mark_top + mark_bottom) // 2), max(1, thickness // 2 + 1), color, -1, cv2.LINE_AA)
+        elif mark == "tilde":
+            line([(cx - w - w // 2 + round(k * 3 * w / 6), round((mark_top + mark_bottom) / 2 - math.sin(k * math.pi / 3) * h / 2)) for k in range(7)])
+        elif mark in {"cedilla", "ogonek"}:
+            line([(cx, baseline), (cx + w // 2, baseline + h // 2), (cx - w // 2, baseline + h)])
+
+
+def _put_text(layer, glyphs, origin, font, scale, color, thickness):
+    x, baseline = origin
+    for (base, marks), advance in zip(glyphs, _advances(glyphs, font, scale)):
+        if marks == ["degree"]:
+            cap = cv2.getTextSize("H", font, scale, 1)[0][1]
+            cv2.circle(layer, (x + advance // 2, baseline - cap + cap // 5), max(2, cap // 5), color, thickness, cv2.LINE_AA)
+            x += advance
+            continue
+        cv2.putText(layer, base, (x, baseline), font, scale, color, thickness, cv2.LINE_AA)
+        if marks:
+            _put_marks(layer, marks, base, x, baseline, advance, scale, font, color, thickness)
+        x += advance
+
+
+def draw_text(layer, shape, origin, width, color):
+    """Outlined text with ``origin`` as its top-left corner, sized like the editor.
+
+    The editor measures ``size`` on a 1000-unit-wide canvas. When the editor
+    stored a box (``x2``/``y2`` beyond the anchor) the text is shrunk to fit it
+    and rotated by ``rotation`` degrees (clockwise) around the box centre, like
+    the SVG. Accents are drawn as separate strokes over the ASCII base glyph.
+    """
+    text = str(shape.get("text") or "")
+    if len(text) > 200: raise ValueError("Annotation text is too long")
+    glyphs = _glyphs(text.strip())
+    if not glyphs: return
+    font = cv2.FONT_HERSHEY_DUPLEX
+    height = layer.shape[0]
+    target = min(400, max(4, number(shape.get("size"), 36))) * width / 1000
+    base_height = cv2.getTextSize("H", font, 1, 1)[0][1]
+    scale = target * .72 / base_height
+    thickness = max(1, round(scale * 2))
+    x2 = round(min(1, max(0, number(shape.get("x2"), 0))) * (width - 1))
+    y2 = round(min(1, max(0, number(shape.get("y2"), 0))) * (height - 1))
+    has_box = x2 > origin[0] + 1 and y2 > origin[1] + 1
+    if has_box:  # Hershey glyphs are wider than the editor font: never overflow the box
+        measured = _text_width(glyphs, font, scale, thickness)
+        if measured > x2 - origin[0]:
+            scale *= (x2 - origin[0]) / measured
+            thickness = max(1, round(scale * 2))
+    x, y = origin[0], origin[1] + round(target * .8)
+    outline = thickness + max(2, round(target / 9))
+    rotation = number(shape.get("rotation"), 0) % 360
+    target_layer = np.zeros_like(layer) if rotation else layer
+    _put_text(target_layer, glyphs, (x, y), font, scale, (0, 0, 0, color[3]), outline)
+    _put_text(target_layer, glyphs, (x, y), font, scale, color, thickness)
+    if rotation:
+        if has_box:
+            centre = ((origin[0] + x2) / 2, (origin[1] + y2) / 2)
+        else:
+            centre = (origin[0] + _text_width(glyphs, font, scale, thickness) / 2, origin[1] + target / 2)
+        matrix = cv2.getRotationMatrix2D(centre, -rotation, 1)
+        rotated = cv2.warpAffine(target_layer, matrix, (layer.shape[1], layer.shape[0]), flags=cv2.INTER_LINEAR,
+                                 borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+        np.copyto(layer, rotated, where=rotated[:, :, 3:4] > 0)
 
 
 def blend(base, layer):

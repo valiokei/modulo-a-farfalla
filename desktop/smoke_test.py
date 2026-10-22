@@ -75,6 +75,17 @@ def main():
             if os.name == "nt":
                 assert len(health["video"]["encoders"]) == 3
             assert client.get("/desktop/health").json()["ai_bundled"] is False
+            ai = client.get("/desktop/health").json()["ai"]
+            # Both packaged desktop platforms ship an on-demand pack, so a clean
+            # data directory must report "supported" and offer the install.
+            assert ai["phase"] == "not_installed" and ai["supported"] is True and ai["active"] is False
+            status = client.get("/desktop/ai/status").json()
+            assert status["phase"] == "not_installed" and status["progress"] == 0
+            # Installing real ~2 GB assets is out of scope here: the request must
+            # be accepted and must not report success synchronously.
+            start = client.post("/desktop/ai/install").json()
+            assert start["phase"] in {"starting", "downloading", "failed"} or start["phase"] == "ready"
+            assert client.post("/desktop/ai/remove").status_code in {200, 409}
             assert client.get("/desktop/update/status").status_code == 404
             # The SPA GET catch-all may return 405 for an unknown POST route.
             assert client.post("/desktop/update/credentials", json={"token": "not-a-real-token"}).status_code in {404, 405}
@@ -174,7 +185,7 @@ def main():
 
         with sqlite3.connect(root / "touchline.db") as database:
             assert database.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-            assert database.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0007"
+            assert database.execute("SELECT version_num FROM alembic_version").fetchone()[0] == max(p.name[:4] for p in (Path(__file__).resolve().parents[1] / "backend/alembic/versions").glob("[0-9][0-9][0-9][0-9]_*.py"))
         assert list((root / "database-backups").glob("*.db")), "No verified pre-migration backup"
         print("PASS: packaged local server, authentication, Host/Origin protection, upload, proxy, range streaming, tagging, export, SQLite migration and backup")
     finally:

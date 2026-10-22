@@ -259,6 +259,26 @@ def test_fixture_parser_distinguishes_zero_zero_from_unplayed(monkeypatch):
     assert [(f.home_score, f.away_score, f.played) for f in fixtures] == [
         (0, 0, True), (0, 0, False)
     ]
+    # Short test numbers are not official match numbers: no round is guessed.
+    assert [f.round_label for f in fixtures] == ["", ""]
+
+
+def test_round_comes_from_the_official_match_number(monkeypatch):
+    """Real 'vše' page of competition 752 (saved 2026-10-21): 55 fixtures, each
+    official number ends in RRNN; filtering the site by id_round=3 returned only
+    numbers ending in 03xx, so the two digits are the round."""
+    from app.league.pfs import round_from_game_number
+    html = (FIXTURES / "zapasy_752_all_rounds.html").read_text(encoding="utf-8")
+    prov = FakeProvider()
+    monkeypatch.setattr(prov._client, "get", lambda _url: html)
+    monkeypatch.setattr(prov, "_resolve_requested_competition", lambda cid, lid: ("752-x", None))
+    fixtures = prov.get_fixtures("752-x")
+    rounds = {}
+    for f in fixtures: rounds.setdefault(f.round_label, []).append(f.id)
+    assert len(fixtures) == 55 and sorted(rounds, key=lambda r: int(r.split(".")[0])) == [f"{n}.kolo" for n in range(1, 12)]
+    assert all(len(ids) == 5 for ids in rounds.values())
+    assert round_from_game_number('<td class="game_number">2026110A5B0503</td>') == "5.kolo"
+    assert round_from_game_number('<td class="game_number">2026110A5B0001</td>') == ""
 
 
 def test_bare_slug_resolves_via_listing_and_unknown_ids_are_refused(monkeypatch):
@@ -304,3 +324,95 @@ def test_roster_has_ids_and_stats():
         rows.append((pid, link.group(2)))
     assert len(rows) >= 15
     assert any("Example Player 01" in n for _, n in rows)
+
+
+PIBFAL_HOME = """
+<h4 class="sp-table-caption">Championship 2025/26</h4><table><tbody><tr><td data-label="Pos">1</td><td data-label="Club"><a href="https://pibfal.com/team/old-club/">Old Club</a></td></tr></tbody></table>
+<h4 class="sp-table-caption">Championship 2026/27</h4><div class="sp-table-wrapper"><table class="sp-league-table"><thead><tr><th class="data-rank">Pos</th><th class="data-name">Club</th></tr></thead><tbody>
+<tr class="odd sp-row-no-0"><td class="data-rank" data-label="Pos">1</td><td class="data-name has-logo" data-label="Club"><a href="https://pibfal.com/team/north-fc/"><span class="team-logo"></span>North FC</a></td><td data-label="P">2</td><td data-label="W">2</td><td data-label="D">0</td><td data-label="L">0</td><td data-label="F">5</td><td data-label="A">1</td><td data-label="GD">4</td><td data-label="Pts">6</td></tr>
+<tr class="even sp-row-no-1"><td class="data-rank" data-label="Pos">2</td><td class="data-name has-logo" data-label="Club"><a href="https://pibfal.com/team/south-fc/"><span class="team-logo"></span>South FC</a></td><td data-label="P">2</td><td data-label="W">0</td><td data-label="D">0</td><td data-label="L">2</td><td data-label="F">1</td><td data-label="A">5</td><td data-label="GD">-4</td><td data-label="Pts">0</td></tr>
+<tr class="odd sp-row-no-2"><td class="data-rank" data-label="Pos">3</td><td class="data-name has-logo" data-label="Club"><a href="https://pibfal.com/team/east-fc/"><span class="team-logo"></span>East FC</a></td><td data-label="P">0</td><td data-label="W">0</td><td data-label="D">0</td><td data-label="L">0</td><td data-label="F">0</td><td data-label="A">0</td><td data-label="GD">0</td><td data-label="Pts">0</td></tr>
+</tbody></table></div>"""
+
+
+def _pibfal_event(slug, date, home, away, result, season="2026/27 Championship"):
+    team = lambda name: f'<a href="https://pibfal.com/team/{name.lower().replace(" ", "-")}/">{name} <span class="team-logo"></span></a>'
+    return (f'<tr class="sp-row alternate"><td class="data-date" data-label="Date"><a href="https://pibfal.com/event/{slug}/"><date>{date}</date>x</a></td>'
+            f'<td class="data-home has-logo" data-label="Home">{team(home)}</td>'
+            f'<td class="data-time ok" data-label="Time/Results"><a href="https://pibfal.com/event/{slug}/">{result}</a></td>'
+            f'<td class="data-away has-logo" data-label="Away">{team(away)}</td>'
+            f'<td class="data-season" data-label="Season">{season}</td></tr>')
+
+
+def test_pibfal_sync_imports_every_club_of_the_season(monkeypatch, tmp_path):
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import sessionmaker
+    from app.db import Base
+    from app.models import LeagueCompetition, LeagueFixture, LeagueStanding
+    from app.league import pibfal, sync
+
+    north_vs_south = _pibfal_event("north-fc-vs-south-fc", "2026-10-05 20:00:00", "North FC", "South FC", "3 - 1")
+    upcoming = _pibfal_event("east-fc-vs-south-fc", "2026-10-12 20:00:00", "East FC", "South FC", "<date>&nbsp;20:00:00</date>8:00 pm")
+    pages = {
+        "https://pibfal.com/": PIBFAL_HOME,
+        "https://pibfal.com/team/north-fc/": north_vs_south + _pibfal_event("old", "2025-10-05 20:00:00", "North FC", "Old Club", "9 - 0", "2025/26 Championship"),
+        "https://pibfal.com/team/south-fc/": north_vs_south + upcoming,
+        "https://pibfal.com/team/east-fc/": _pibfal_event("south-fc-vs-north-fc", "2026-10-19 20:00:00", "South FC", "North FC", "0 - 2") + upcoming,
+    }
+    engine = create_engine(f"sqlite:///{tmp_path / 'pibfal.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    monkeypatch.setattr(sync, "SessionLocal", Session)
+    monkeypatch.setattr(pibfal.FetchClient, "get", lambda self, url: pages[url])
+    with Session() as db:  # a row written by the old team-page-only importer
+        comp = LeagueCompetition(provider="pibfal", external_id="2026/27", name="PIBFAL", season="2026/27")
+        db.add(comp); db.flush()
+        db.add(LeagueFixture(competition_id=comp.id, external_id="20261005200000", match_date="2026-10-05",
+                             home_team="North FC", away_team="South FC", status="upcoming"))
+        db.commit()
+    for _ in range(2):
+        result = sync.sync_pibfal()
+    assert result["teams"] == 3 and result["imported"] == 3
+    with Session() as db:
+        fixtures = db.scalars(select(LeagueFixture).order_by(LeagueFixture.match_date)).all()
+        assert [(f.external_id, f.home_external_id, f.away_external_id, f.status, f.home_score, f.away_score) for f in fixtures] == [
+            ("north-fc-vs-south-fc", "north-fc", "south-fc", "played", 3, 1),
+            ("east-fc-vs-south-fc", "east-fc", "south-fc", "upcoming", None, None),
+            ("south-fc-vs-north-fc", "south-fc", "north-fc", "played", 0, 2)]
+        table = db.scalars(select(LeagueStanding).order_by(LeagueStanding.position)).all()
+        assert [(s.external_team_id, s.team_name, s.played, s.goals_for, s.goals_against, s.points) for s in table] == [
+            ("north-fc", "North FC", 2, 5, 1, 6), ("south-fc", "South FC", 2, 1, 5, 0), ("east-fc", "East FC", 0, 0, 0, 0)]
+
+
+def test_old_concatenated_pfs_team_names_are_repaired_on_import(monkeypatch, tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.db import Base
+    from app.models import Team as LocalTeam
+    from app.league import sync
+    from app.league.pfs import Competition, Team
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'names.db'}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    monkeypatch.setattr(sync, "SessionLocal", Session)
+    dto = Team(id="138", name="Example United z.s.", short_name="Example", abbreviation="EXU")
+    from datetime import date
+    from app.models import Match
+    with Session() as db:
+        old = LocalTeam(name="Example United z.s. Example EXU"); db.add(old); db.flush(); old_id = old.id
+        db.add(Match(date=date(2026, 10, 5), home_team="Example United z.s. Example EXU", away_team="Other FC", home_team_id=old_id))
+        db.commit()
+
+    class Provider:
+        def __init__(self, season, force=False): pass
+        def get_competition(self, cid): return Competition(id=cid, name="League", season="2026", slug="league", teams=[dto])
+    monkeypatch.setattr(sync.pfs, "PragueFootballAssociationProvider", Provider)
+    monkeypatch.setattr(sync, "_fetch_team_logo", lambda *a: None)
+    import pytest as _pytest
+    with _pytest.raises(ValueError):  # an old name still counts as an existing club: explicit mapping required
+        sync.import_competition("pfs", "2026", "752")
+    sync.import_competition("pfs", "2026", "752", map_team={"138": old_id})
+    with Session() as db:
+        assert [team.name for team in db.query(LocalTeam)] == ["Example United z.s."]
+        assert [(m.home_team, m.away_team) for m in db.query(Match)] == [("Example United z.s.", "Other FC")]

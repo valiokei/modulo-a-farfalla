@@ -51,3 +51,17 @@ body.desktop-app header button:has(svg.lucide-log-out){display:none}
 .desktopDiagnosticsControls label{display:grid;gap:4px;min-width:180px}
 .desktopDiagnosticsControls select,.desktopDiagnosticsControls button{min-height:38px;padding:6px 10px;border:1px solid #819889;border-radius:5px;background:#fff;color:#193b2a}
 .desktopDiagnosticsControls button{display:flex;align-items:center;gap:7px;cursor:pointer}
+.desktopAiWarning.active {color: #1e6b3a;}
+.desktopAi {display: grid; align-content: start; gap: 10px;}
+.desktopAi h2 {display: flex; align-items: center; gap: 9px;}
+.desktopAi > p {margin: 0;}
+.desktopAiCard {border: 1px solid #b8c8bd; border-radius: 6px; padding: 14px; background: #f4f8f5; display: grid; gap: 8px; justify-items: start; max-width: 640px;}
+.desktopAiCard b {font-size: 14px;}
+.desktopAiCard small {color: #5c6b60;}
+.desktopAiCard progress {width: 100%;}
+.desktopAiCard button {display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; padding: 8px 14px; border: 1px solid #819889; border-radius: 5px; background: #fff; color: #193b2a; cursor: pointer;}
+.desktopAiCard button.primary {background: #145a39; border-color: #145a39; color: #fff; font-weight: 700;}
+.desktopAiCard button.primary:hover {background: #0e472c;}
+.desktopAiCard button:disabled {opacity: .6; cursor: wait;}
+.desktopAiCard .error {margin: 0; width: 100%;}
+.desktopAiCard.ready {border-color: #2b8458; background: #f0f8e9;}

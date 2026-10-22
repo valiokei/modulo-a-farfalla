@@ -23,8 +23,11 @@ class Settings(BaseSettings):
     worker_nice: int = 10
     ai_enabled: bool = True
     ai_python: str = ""
+    ai_pythonpath: str = ""
+    ai_hf_home: str = ""
     ai_device: str = "auto"
     ai_batch_size: int = 1
+    ai_threads: int = 0  # 0 = all logical CPUs but two
 
     @property
     def origins(self) -> list[str]:

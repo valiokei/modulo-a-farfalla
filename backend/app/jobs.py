@@ -215,8 +215,24 @@ def run_spotting_process(proxy: Path, work: Path, progress) -> None:
     import subprocess
     import sys
     import time
-    environment = dict(os.environ, OMP_NUM_THREADS="2", OPENBLAS_NUM_THREADS="2", OSL_PRETRAINED_WEIGHTS="0", WANDB_MODE="disabled", HF_HOME=str(settings.storage_root / "model-cache"))
-    command = [settings.ai_python or sys.executable,"-m","app.spotting_cli",str(proxy.resolve()),str(work.resolve()),"--device",settings.ai_device,"--batch-size",str(settings.ai_batch_size)]
+    # On-demand desktop runtimes carry their own site-packages and model cache;
+    # PYTHONPATH/HF_HOME point at them and the hub stays offline (no downloads at
+    # inference time). Without that package the defaults below are unchanged.
+    # The child must also import the bundled "app" package: desktop builds run
+    # from a different working directory than backend/ in the server deployment.
+    environment = dict(os.environ, OMP_NUM_THREADS="2", OPENBLAS_NUM_THREADS="2", OSL_PRETRAINED_WEIGHTS="0", WANDB_MODE="disabled",
+                       HF_HOME=settings.ai_hf_home or str(settings.storage_root / "model-cache"))
+    if settings.ai_hf_home:
+        environment["HF_HUB_OFFLINE"] = "1"
+        # The pack is the only source of AI packages on Linux. Without this the
+        # packaged interpreter also sees ~/.local/lib/pythonX.Y/site-packages,
+        # where an unrelated torch (or a stale one) can shadow the verified pack.
+        environment["PYTHONNOUSERSITE"] = "1"
+    pythonpath = [value for value in (settings.ai_pythonpath, str(Path(__file__).resolve().parents[1])) if value]
+    if os.environ.get("PYTHONPATH"):
+        pythonpath.append(os.environ["PYTHONPATH"])
+    environment["PYTHONPATH"] = os.pathsep.join(pythonpath)
+    command = [settings.ai_python or sys.executable,"-m","app.spotting_cli",str(proxy.resolve()),str(work.resolve()),"--device",settings.ai_device,"--batch-size",str(settings.ai_batch_size),"--threads",str(ai_threads())]
     with (work / "inference.log").open("w") as log:
         process = subprocess.Popen(command, stdout=log, stderr=log, env=environment)
         started = time.monotonic()
@@ -231,6 +247,11 @@ def run_spotting_process(proxy: Path, work: Path, progress) -> None:
             time.sleep(1)
         if process.returncode:
             raise RuntimeError("OpenSportsLib inference failed: " + (work / "inference.log").read_text()[-1200:])
+
+
+def ai_threads() -> int:
+    from .action_spotting import default_threads
+    return settings.ai_threads if settings.ai_threads > 0 else default_threads()
 
 
 def analyze(ai_job_id: str) -> None:
@@ -250,7 +271,7 @@ def analyze(ai_job_id: str) -> None:
             proxy = settings.storage_root / "ai" / f"{video.id}-224p-v1.mp4"
             if not proxy.exists():
                 partial = proxy.with_suffix(".partial.mp4")
-                run_ffmpeg(["-i",video.proxy_path or video.original_path,"-an","-vf","scale=398:224","-r","25","-c:v","libx264","-preset","veryfast","-threads","2",str(partial)])
+                run_ffmpeg(["-i",video.proxy_path or video.original_path,"-an","-vf","scale=398:224","-r","25","-c:v","libx264","-preset","veryfast","-threads",str(ai_threads()),str(partial)])
                 partial.replace(proxy)
             def save_ai_progress(percent, stage):
                 job.progress = percent

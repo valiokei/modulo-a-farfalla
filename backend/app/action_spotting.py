@@ -5,6 +5,7 @@ from pathlib import Path
 from bisect import bisect_left, insort
 import json
 import math
+import os
 
 MODEL_ID = "OpenSportsLab/OSL-loc-snbas-2025-e2e"
 MODEL_REVISION = "54e24a663a5a0ed057ef12cf16d9460d270ddc6e"
@@ -20,6 +21,41 @@ class ActionPrediction:
     model: str
     model_version: str
     source: str = "NEURAL_MODEL"
+
+
+def default_threads() -> int:
+    """All logical CPUs available to this process but two, so the app stays responsive."""
+    try:
+        available = len(os.sched_getaffinity(0))
+    except AttributeError:  # Windows/macOS
+        available = os.cpu_count() or 1
+    return max(1, available - 2)
+
+
+def _report_windows(module, progress) -> None:
+    """Map the official inference loop (one tqdm step per clip window) to 10-95%.
+
+    OpenSportsLib only reports progress through a console tqdm bar; without this
+    the job stays at 10% for the whole inference."""
+    original = module.tqdm
+    def tracked(iterable=None, *args, **kwargs):
+        # Only the first loop is the clip-window inference; later bars (metric
+        # deltas) must not move the reported progress backwards.
+        module.tqdm = original
+        bar = original(iterable, *args, **kwargs)
+        if iterable is None:
+            return bar
+        total = bar.total or 0
+        def windows():
+            last = -1
+            for done, item in enumerate(bar, 1):
+                yield item
+                percent = 10 + int(85 * done / total) if total else 10
+                if percent != last:
+                    last = percent
+                    progress(min(95, percent), f"Action spotting {done}/{total}")
+        return windows()
+    module.tqdm = tracked
 
 
 class ActionSpottingProvider(ABC):
@@ -60,7 +96,7 @@ class OpenSportsLibProvider(ActionSpottingProvider):
     def __init__(self, device="auto", batch_size=1, threads=2, threshold=.5):
         self.device = device
         self.batch_size = max(1, min(16, batch_size))
-        self.threads = max(1, min(4, threads))
+        self.threads = max(1, int(threads))
         self.threshold = threshold
 
     def predict(self, video: Path, work_dir: Path, progress) -> list[ActionPrediction]:
@@ -69,8 +105,14 @@ class OpenSportsLibProvider(ActionSpottingProvider):
         from omegaconf import OmegaConf
         from opensportslib.apis import LocalizationModel
         from opensportslib.core.utils.config import load_config_omega, namespace_to_omegaconf
+        from opensportslib.metrics import localization_metric
 
         torch.set_num_threads(self.threads)
+        try:
+            torch.set_num_interop_threads(min(4, self.threads))
+        except RuntimeError:  # already set in this process
+            pass
+        _report_windows(localization_metric, progress)
         device = "cuda" if torch.cuda.is_available() and self.device != "cpu" else "cpu"
         if self.device == "cuda" and device != "cuda":
             raise RuntimeError("CUDA requested but unavailable. AMD VA-API accelerates video encoding, not CUDA inference.")
@@ -108,6 +150,6 @@ class OpenSportsLibProvider(ActionSpottingProvider):
                 model.config.DATA.common.splits.test.dataloader.batch_size = self.batch_size
                 torch.cuda.empty_cache()
         (work_dir / "predictions.json").write_text(json.dumps(predictions))
-        (work_dir / "provenance.json").write_text(json.dumps({"model": MODEL_ID, "revision": revision, "device": device, "decoder": "dali" if dali else "opencv", "batch_size": self.batch_size}))
+        (work_dir / "provenance.json").write_text(json.dumps({"model": MODEL_ID, "revision": revision, "device": device, "decoder": "dali" if dali else "opencv", "batch_size": self.batch_size, "threads": self.threads}))
         progress(95, "Finalizing suggestions")
         return parse_predictions(predictions, revision, self.threshold)

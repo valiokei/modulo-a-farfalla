@@ -14,7 +14,7 @@ a = Analysis([str(root / "desktop" / "launcher.py")],
              pathex=[str(root / "backend"), str(root)], binaries=[], datas=data,
              hiddenimports=collect_submodules("app") + collect_submodules("uvicorn")
              + ["sqlalchemy.dialects.sqlite", "pwdlib.hashers.argon2", "alembic.sql.sqlite",
-                "desktop.diagnostics", "desktop.update"],
+                "desktop.diagnostics", "desktop.update", "desktop.ai_runtime"],
              excludes=["pytest", "torch", "opensportslib"], noarchive=False)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="ModuloAFarfalla", debug=False,
