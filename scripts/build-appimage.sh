@@ -34,7 +34,8 @@ OUTPUT="$OUTPUT_DIR/Modulo-a-Farfalla-$VERSION_VALUE-x86_64.AppImage"
 PYTHON_URL='https://github.com/astral-sh/python-build-standalone/releases/download/20261001/cpython-3.12.15%2B20261001-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz'
 PYTHON_TAR="$CACHE/cpython-3.12.15+20261001-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
 PYTHON_SHA256=7bb1659e3235077b7f63d5b6eb6ce653c6fcd6c5041e9d5f73b42ce10421464d
-FFMPEG_URL='https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-01-13-06/ffmpeg-n8.1.3-14-g330caae0c1-linux64-gpl-8.1.tar.xz'
+FFMPEG_URL='https://github.com/valiokei/modulo-a-farfalla/releases/download/build-deps-1/ffmpeg-n8.1.3-14-g330caae0c1-linux64-gpl-8.1.tar.xz'
+# Mirror of BtbN autobuild-2026-10-01-13-06 (upstream nightlies expire); same file, same SHA-256.
 FFMPEG_TAR="$CACHE/ffmpeg-n8.1.3-14-g330caae0c1-linux64-gpl-8.1.tar.xz"
 FFMPEG_SHA256=89cca03b81002bef5a48c2e983afa6100e52904052c1c75dfd2090b09b57efee
 # The bundled FFmpeg resolves libva.so.2 at runtime and needs the 2.24 ABI
